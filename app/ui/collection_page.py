@@ -136,7 +136,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self._load_cancelled = False
         self._progress_value = 0
         self._progress_timer = QTimer(self)
-        self._progress_timer.setInterval(50)
+        self._progress_timer.setInterval(33)
         self._progress_timer.timeout.connect(self._spin_progress)
 
         self._setup_ui()

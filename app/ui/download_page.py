@@ -35,6 +35,7 @@ class DownloadItemCard(CardWidget):
         super().__init__(parent)
         self.task_id = task_id
         self._output_file = ""
+        self._last_status = ""
 
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
@@ -117,18 +118,21 @@ class DownloadItemCard(CardWidget):
         """Update UI from DownloadProgress data."""
         self.progress_bar.setValue(int(progress.progress_pct))
 
-        # Store output file path if available
         if progress._output_file:
             self._output_file = progress._output_file
 
         downloaded = format_size(progress.downloaded)
         total = format_size(progress.total_size)
         self.size_label.setText(f"{downloaded} / {total}")
-
         self.speed_label.setText(format_speed(progress.speed))
         self.percent_label.setText(f"{progress.progress_pct:.1f}%")
 
-        # Status text
+        # Only update stylesheets and visibility when status changes
+        status = progress.status
+        if status == self._last_status:
+            return
+        self._last_status = status
+
         status_map = {
             "pending": "等待中",
             "downloading": "下载中",
@@ -137,26 +141,26 @@ class DownloadItemCard(CardWidget):
             "error": "下载失败",
             "merging": "正在合并音视频...",
         }
-        self.status_label.setText(status_map.get(progress.status, progress.status))
+        self.status_label.setText(status_map.get(status, status))
 
-        if progress.status == "error":
+        if status == "error":
             self.status_label.setStyleSheet("font-size: 12px; color: #e74c3c;")
             self.progress_bar.setCustomBarColor(QColor(231, 76, 60), QColor(192, 57, 43))
             self.pause_btn.setVisible(False)
             self.retry_btn.setVisible(True)
-        elif progress.status == "completed":
+        elif status == "completed":
             self.status_label.setStyleSheet("font-size: 12px; color: #27ae60;")
             self.pause_btn.setVisible(False)
             self.retry_btn.setVisible(False)
             self.open_btn.setVisible(True)
-        elif progress.status == "paused":
+        elif status == "paused":
             self.status_label.setStyleSheet("font-size: 12px; color: #f39c12;")
             self.pause_btn.setText("继续")
-        elif progress.status == "downloading":
+        elif status == "downloading":
             self.status_label.setStyleSheet("font-size: 12px; color: #3498db;")
             self.pause_btn.setText("暂停")
             self.pause_btn.setVisible(True)
-        elif progress.status == "merging":
+        elif status == "merging":
             self.status_label.setStyleSheet("font-size: 12px; color: #9b59b6;")
 
 

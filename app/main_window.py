@@ -2,7 +2,8 @@
 Main application window with FluentWindow sidebar navigation.
 """
 import sys
-from PySide6.QtCore import Qt, QTimer
+import asyncio
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QAction, QKeySequence, QShortcut, QCloseEvent
 
@@ -22,10 +23,35 @@ from app.ui.history_page import HistoryPage
 from app.ui.up_page import UpPage
 from app.ui.collection_page import CollectionPage
 from app.ui.search_page import SearchPage
+from app.ui.splash_screen import SplashOverlay
 from app.clipboard_monitor import ClipboardMonitor
 from app.notification import NotificationService
 from app.platforms.bilibili import BilibiliPlatform
 from app.utils.helpers import detect_url_type
+from typing import Optional
+
+
+class CredentialCheckWorker(QThread):
+    """Validates Bilibili credential in a background thread."""
+    result_ready = Signal(bool, bool)  # is_valid, was_logged_in
+
+    def __init__(self, bilibili, was_logged_in: bool):
+        super().__init__()
+        self.bilibili = bilibili
+        self.was_logged_in = was_logged_in
+
+    def run(self):
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                is_valid = loop.run_until_complete(
+                    self.bilibili.validate_credential()
+                )
+            finally:
+                loop.close()
+        except Exception:
+            is_valid = False
+        self.result_ready.emit(is_valid, self.was_logged_in)
 
 
 class MainWindow(FluentWindow):
@@ -52,6 +78,7 @@ class MainWindow(FluentWindow):
 
         self._batch_urls: list[str] = []
         self._batch_index: int = 0
+        self._cred_worker: Optional[CredentialCheckWorker] = None
 
         # Create pages - set unique object names for navigation routing
         self.home_page = HomePage(self)
@@ -88,6 +115,13 @@ class MainWindow(FluentWindow):
         # Apply theme
         self._apply_theme()
 
+        self.splash = None
+        if self.config.startup_animation:
+            self.splash = SplashOverlay(self)
+            self.splash.raise_()
+            self.splash.show()
+            QApplication.processEvents()
+
         # Listen for system theme changes (when in AUTO mode)
         self.themeListener = SystemThemeListener(self)
         self.themeListener.start()
@@ -105,6 +139,15 @@ class MainWindow(FluentWindow):
 
         # Initial credential check after 5 seconds (let UI settle)
         QTimer.singleShot(5000, self._refresh_bilibili_credential)
+
+        # Dismiss splash after a brief delay so the user can see the animation
+        if self.splash:
+            QTimer.singleShot(1000, self._dismiss_splash)
+
+    def _dismiss_splash(self):
+        self.splash.set_status("加载完成")
+        self.splash.dismiss()
+        self.splash = None
 
     def _init_navigation(self):
         """Set up sidebar navigation items."""
@@ -439,26 +482,14 @@ class MainWindow(FluentWindow):
         self._batch_index = 0
 
     def _refresh_bilibili_credential(self):
-        """Periodically refresh Bilibili credentials and check validity.
-
-        Reloads cookies from config (in case user updated them in settings),
-        rebuilds the credential, and validates it with a lightweight API call.
-        If the credential is expired, shows a warning notification.
-        """
-        import asyncio
         was_logged_in = self.bilibili._check_login()
-
-        # Reload cookies from config and rebuild credential
         self.bilibili.refresh_credential()
-
-        # Propagate refreshed credential to all pages
         for page in (self.up_page, self.collection_page, self.search_page):
             if hasattr(page, '_platform') and page._platform is self.bilibili:
-                page._platform = self.bilibili  # same instance, already refreshed
+                page._platform = self.bilibili
 
         if not self.bilibili._check_login():
             if was_logged_in:
-                # Was logged in but now credentials are gone
                 InfoBar.warning(
                     title="B站登录已失效",
                     content="Bilibili 登录凭证已失效，请重新登录",
@@ -468,31 +499,26 @@ class MainWindow(FluentWindow):
                 )
             return
 
-        # Validate credential with API call (async, run in background)
-        try:
-            loop = asyncio.new_event_loop()
-            try:
-                is_valid = loop.run_until_complete(
-                    self.bilibili.validate_credential()
-                )
-                if not is_valid and was_logged_in:
-                    InfoBar.warning(
-                        title="B站登录已失效",
-                        content="Bilibili 登录已过期，请前往设置重新登录",
-                        orient=Qt.Horizontal, isClosable=True,
-                        position=InfoBarPosition.TOP_RIGHT, duration=5000,
-                        parent=self,
-                    )
-                    print("[INFO] Bilibili credential validation: expired",
-                          file=sys.stderr, flush=True)
-                else:
-                    print("[INFO] Bilibili credential validation: OK",
-                          file=sys.stderr, flush=True)
-            finally:
-                loop.close()
-        except Exception as e:
-            print(f"[WARNING] Credential validation error: {e}",
-                  file=sys.stderr, flush=True)
+        if self._cred_worker and self._cred_worker.isRunning():
+            self._cred_worker.requestInterruption()
+            self._cred_worker.wait(2000)
+        self._cred_worker = CredentialCheckWorker(self.bilibili, was_logged_in)
+        self._cred_worker.result_ready.connect(self._on_credential_result)
+        self._cred_worker.finished.connect(self._on_cred_worker_finished)
+        self._cred_worker.start()
+
+    def _on_credential_result(self, is_valid: bool, was_logged_in: bool):
+        if not is_valid and was_logged_in:
+            InfoBar.warning(
+                title="B站登录已失效",
+                content="Bilibili 登录已过期，请前往设置重新登录",
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=5000,
+                parent=self,
+            )
+
+    def _on_cred_worker_finished(self):
+        self._cred_worker = None
 
     def _on_batch_resolve_complete(self):
         pass  # kept for compatibility
@@ -549,7 +575,10 @@ class MainWindow(FluentWindow):
         super().closeEvent(event)
 
     def _do_cleanup(self):
-        """Shared cleanup logic."""
+        self._cred_refresh_timer.stop()
+        if self._cred_worker and self._cred_worker.isRunning():
+            self._cred_worker.requestInterruption()
+            self._cred_worker.wait(3000)
         self.clipboard_monitor.stop()
         self.themeListener.requestInterruption()
         self.themeListener.wait(3000)

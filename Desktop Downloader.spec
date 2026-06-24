@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
-# v1.0.2-alpha.1 — UI architecture refactor + credential validation
-# Changes: WorkerMixin lifecycle, centralized parse router, batch mode fix,
-#           Mac trackpad scroll, periodic cookie refresh, error recovery
+# v1.0.2-alpha.2 — Startup splash, batch import redesign, performance & UI polish
+# Changes: SplashOverlay FluentUI splash animation, BatchImportDialog redesign,
+#           theme-aware card hover, history multi-P card polish, smoother progress rings
 
 
 a = Analysis(

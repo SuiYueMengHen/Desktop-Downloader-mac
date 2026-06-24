@@ -49,8 +49,12 @@ QUALITY_LABELS = {
 
 class ParseWorker(AsyncWorker):
     """Non-blocking async video info parser."""
+    _gen_counter = 0
+
     def __init__(self, platform: BasePlatform, url: str):
         super().__init__()
+        ParseWorker._gen_counter += 1
+        self._gen = ParseWorker._gen_counter
         self.platform = platform
         self.url = url
 
@@ -104,6 +108,7 @@ class BatchResultCard(CardWidget):
         info_layout.setSpacing(2)
 
         self.title_label = StrongBodyLabel(video_info.title[:60])
+        self.title_label.setToolTip(video_info.title)
         self.title_label.setWordWrap(False)
         info_layout.addWidget(self.title_label)
 
@@ -122,15 +127,10 @@ class BatchResultCard(CardWidget):
         self.page_selector_widget.setVisible(False)
         page_selector_layout = QVBoxLayout(self.page_selector_widget)
         page_selector_layout.setContentsMargins(0, 0, 0, 0)
-        self.page_scroll = SmoothScrollArea()
-        configure_smooth_scroll(self.page_scroll)
-        self.page_scroll.setWidgetResizable(True)
-        self.page_scroll.setFixedHeight(100)
-        self.page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        page_scroll_content = QWidget()
-        self.page_checkboxes_layout = QVBoxLayout(page_scroll_content)
-        self.page_scroll.setWidget(page_scroll_content)
-        page_selector_layout.addWidget(self.page_scroll)
+        self.page_checkboxes_layout = QHBoxLayout()
+        self.page_checkboxes_layout.setSpacing(4)
+        self.page_checkboxes_layout.setContentsMargins(0, 0, 0, 0)
+        page_selector_layout.addLayout(self.page_checkboxes_layout)
         info_layout.addWidget(self.page_selector_widget)
 
         controls_layout = QHBoxLayout()
@@ -300,6 +300,11 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self._in_batch_mode: bool = False
         self._batch_cards: list[BatchResultCard] = []
 
+        # Generation counter: incremented on each parse. Workers carry the
+        # generation they were created with; stale results are discarded.
+        # This cleanly handles rapid parse switching without crashes.
+        self._parse_gen = 0
+
         self._setup_ui()
         self._init_platforms()
 
@@ -468,15 +473,19 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self._safe_reset()
         self._clear_results()
 
-        # Run parsing in background thread
+        self._parse_gen += 1
+        gen = self._parse_gen
+
         self._current_platform = self._platforms[platform_name]
         worker = ParseWorker(self._current_platform, url)
-        worker.finished.connect(self._on_parse_done)
-        worker.error.connect(self._on_parse_error)
+        worker.finished.connect(lambda r, g=gen: self._on_parse_done(r, g))
+        worker.error.connect(lambda m, g=gen: self._on_parse_error(m, g))
         self._track_worker(worker)
         worker.start()
 
-    def _on_parse_done(self, video_info: VideoInfo):
+    def _on_parse_done(self, video_info: VideoInfo, gen: int):
+        if gen != self._parse_gen:
+            return
         card = BatchResultCard(video_info, self._current_platform, self)
         card.download_requested.connect(self._on_batch_card_download)
         card.card_finished.connect(self._on_card_finished)
@@ -488,7 +497,9 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self._collect_finished_workers()
         self.parse_complete.emit()
 
-    def _on_parse_error(self, msg: str):
+    def _on_parse_error(self, msg: str, gen: int):
+        if gen != self._parse_gen:
+            return
         self._show_error(f"解析失败: {msg}")
         self.parse_btn.setEnabled(True)
         self.url_input.setEnabled(True)
@@ -501,17 +512,21 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self._empty_hint.setVisible(False)
 
     def _clear_results(self):
-        """Clear all result cards."""
-        for card in self._batch_cards:
-            card.cleanup()
-            # Transfer workers to HomePage before card deletion, preventing
-            # "QThread: Destroyed while thread is still running" crash when
-            # Python GC collects QThread wrappers whose C++ threads still run.
-            for w in card._workers:
-                self._workers.append(w)
-            card._workers.clear()
-            self.batch_results_layout.removeWidget(card)
-            card.deleteLater()
+        """Clear all result cards with updates disabled to prevent flicker."""
+        self.setUpdatesEnabled(False)
+        try:
+            for card in self._batch_cards:
+                card.cleanup()
+                # Transfer workers to HomePage before card deletion, preventing
+                # "QThread: Destroyed while thread is still running" crash when
+                # Python GC collects QThread wrappers whose C++ threads still run.
+                for w in card._workers:
+                    self._workers.append(w)
+                card._workers.clear()
+                self.batch_results_layout.removeWidget(card)
+                card.deleteLater()
+        finally:
+            self.setUpdatesEnabled(True)
         self._batch_cards.clear()
         self.results_header.setVisible(False)
         self.results_scroll.setVisible(False)

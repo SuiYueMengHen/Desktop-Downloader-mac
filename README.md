@@ -52,10 +52,10 @@ pyinstaller "Desktop Downloader.spec"
 构建产物位于 `dist/Desktop Downloader.app`。可用 `create-dmg` 或 `hdiutil` 进一步打包为 `.dmg`。
 
 ```bash
-hdiutil create -volname "Desktop Downloader v1.0.1-alpha.1" \
+hdiutil create -volname "Desktop Downloader v1.0.2-alpha.2" \
   -srcfolder "dist/Desktop Downloader.app" \
   -ov -format UDZO \
-  "Desktop Downloader v1.0.1-alpha.1.dmg"
+  "Desktop Downloader v1.0.2-alpha.2.dmg"
 ```
 
 ## 使用说明
@@ -106,6 +106,52 @@ desktop-downloader/
 ├── requirements.txt
 └── Desktop Downloader.spec  # PyInstaller 打包配置
 ```
+
+## 更新记录
+
+### v1.0.2-alpha.2 (2026-06-24)
+
+**新增**
+- ✨ 启动动画 — FluentUI 风格启动闪屏，支持亮色/暗色模式，可在设置中关闭
+- ✨ 批量导入对话框全新设计 — URL 计数徽章、一键粘贴/清空/去重、实时计数
+
+**优化**
+- ⚡ 性能优化 — `setUpdatesEnabled(False)` 包裹批量清除操作，消除闪烁
+- ⚡ 设置页主题切换 — 使用 `setTheme(lazy=True)`，切换瞬间完成
+- ⚡ ProgressRing 定时器 50ms → 33ms（60fps 流畅旋转）
+- 🎨 批量结果卡片 — 完整标题工具提示、横向分 P 选择器
+- 🎨 下载历史 — 合集卡片重新设计：剧集计数徽章、更大操作按钮
+- 🎨 搜索/UP 主空间 — 截断标题添加工具提示
+- 🎨 设置页外观 — 新增「启动动画」开关
+- 🎨 关于页 — Splash 版本号同步更新
+
+### v1.0.2-alpha.1 (2026-06-23)
+
+**架构重构**
+- 🔧 WorkerMixin 生命周期管理 — `_safe_reset()` 统一清理线程
+- 🔧 集中式路由 — `request_parse()` 统一处理所有 URL 请求
+- 🔧 批量模式修复 — `_exit_batch_mode()` 释放锁，`request_parse()` 拒绝并发
+- 🔧 macOS 触控板滚动 — 跳过 SmoothScrollArea，使用 Qt 原生滚轮
+
+**新功能**
+- ✨ 下载调度 — 设置页新增下载时段/日期/限速计划
+- ✨ 剪贴板智能路由 — UP 主空间/合集/视频自动跳转对应页面
+- ✨ 凭证周期性刷新 — 每 30 分钟 + 启动 5 秒后后台校验
+
+**修复**
+- 🐞 快速切换解析链接不再显示过期结果（generation counter）
+- 🐞 批量模式下按 Esc 正确取消
+- 🐞 多线程 `QThread` 析构竞争条件 — 安全转移 Worker 引用
+
+### v1.0.1-alpha.1 (2026-06-22)
+
+- 初始版本发布
+- Bilibili 视频解析与下载
+- 多 P 选择、批量导入
+- UP 主空间与合集浏览
+- 下载管理、历史记录
+- 扫码登录与画质选择
+- Fluent Design 界面
 
 ## 许可证
 

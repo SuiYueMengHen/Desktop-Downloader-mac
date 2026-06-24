@@ -83,6 +83,7 @@ class SearchVideoCard(CardWidget):
 
         title = video.get("title", "无标题")
         self.title_label = BodyLabel(title[:50])
+        self.title_label.setToolTip(title)
         self.title_label.setWordWrap(True)
         self.title_label.setStyleSheet(f"font-size: 13px; color: {normal_text_color()};")
         layout.addWidget(self.title_label)
@@ -187,7 +188,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self._loading = False
         self._progress_value = 0
         self._progress_timer = QTimer(self)
-        self._progress_timer.setInterval(50)
+        self._progress_timer.setInterval(33)
         self._progress_timer.timeout.connect(self._spin_progress)
 
         self._setup_ui()

@@ -50,6 +50,7 @@ class Config:
             "schedule_start": "23:00",
             "schedule_end": "07:00",
             "schedule_days": [0, 1, 2, 3, 4, 5, 6],
+            "startup_animation": True,
         }
 
         # Debounced save: writes to disk at most once per DEBOUNCE_MS
@@ -288,4 +289,13 @@ class Config:
     @schedule_days.setter
     def schedule_days(self, value: list[int]):
         self._data["schedule_days"] = [d for d in value if 0 <= d <= 6]
+        self.save()
+
+    @property
+    def startup_animation(self) -> bool:
+        return self._data.get("startup_animation", True)
+
+    @startup_animation.setter
+    def startup_animation(self, value: bool):
+        self._data["startup_animation"] = value
         self.save()

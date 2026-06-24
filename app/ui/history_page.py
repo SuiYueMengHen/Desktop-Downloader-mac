@@ -16,7 +16,7 @@ from qfluentwidgets import (
     SearchLineEdit, PushButton,
     CardWidget, CaptionLabel, StrongBodyLabel,
     InfoBar, InfoBarPosition, FluentIcon as FIF,
-    TitleLabel, HorizontalSeparator, ToolButton, SmoothScrollArea,
+    TitleLabel, HorizontalSeparator, SmoothScrollArea,
 )
 
 from app.history_manager import HistoryManager
@@ -229,16 +229,27 @@ class HistoryPage(SmoothScrollArea):
                 first = group[0]
                 # Create a single card for the group
                 card = CardWidget()
+                card.setBorderRadius(8)
                 card_layout = QVBoxLayout(card)
-                card_layout.setSpacing(6)
+                card_layout.setSpacing(8)
+                card_layout.setContentsMargins(16, 12, 16, 12)
 
-                # Title
+                title_row = QHBoxLayout()
                 title_label = StrongBodyLabel(first.get("title", "未知标题")[:60])
+                title_label.setToolTip(first.get("title", ""))
                 title_label.setStyleSheet("font-size: 14px;")
                 title_label.setWordWrap(True)
-                card_layout.addWidget(title_label)
 
-                # Meta
+                count_badge = CaptionLabel(f"{len(group)} 集")
+                count_badge.setStyleSheet(
+                    "background-color: #6c5ce7; color: white; "
+                    "padding: 2px 10px; border-radius: 10px; font-size: 11px;"
+                )
+
+                title_row.addWidget(title_label, 1)
+                title_row.addWidget(count_badge, 0, Qt.AlignTop)
+                card_layout.addLayout(title_row)
+
                 meta_parts = []
                 platform = first.get("platform", "")
                 if platform:
@@ -253,24 +264,36 @@ class HistoryPage(SmoothScrollArea):
                 if timestamp:
                     dt = datetime.fromtimestamp(timestamp)
                     meta_parts.append(dt.strftime("%Y-%m-%d"))
-                meta_parts.append(f"共 {len(group)} 集")
                 meta_label = CaptionLabel(" · ".join(meta_parts))
                 meta_label.setStyleSheet(f"color: {secondary_text_color()}; font-size: 12px;")
                 card_layout.addWidget(meta_label)
 
-                # Episode list
-                for e in group:
-                    ep_layout = QHBoxLayout()
+                card_layout.addWidget(HorizontalSeparator())
+
+                for i, e in enumerate(group):
+                    ep_row = QHBoxLayout()
+                    ep_row.setSpacing(8)
+
                     pl = e.get("page_label", "")
                     ep_title = e.get("title", "")[:40]
                     dur = format_duration(e.get("duration", 0)) if e.get("duration") else ""
-                    ep_label = CaptionLabel(f"{pl} {'· ' + dur if dur else ''}")
-                    ep_label.setStyleSheet(f"color: {muted_text_color()}; font-size: 11px;")
-                    ep_layout.addWidget(ep_label)
-                    ep_layout.addStretch()
 
-                    open_btn = ToolButton(FIF.FOLDER)
+                    ep_label = CaptionLabel(f"{pl}  {ep_title}")
+                    ep_label.setStyleSheet(f"color: {muted_text_color()}; font-size: 12px;")
+                    ep_label.setToolTip(e.get("title", ""))
+                    ep_label.setMinimumWidth(120)
+
+                    if dur:
+                        dur_label = CaptionLabel(dur)
+                        dur_label.setStyleSheet(f"color: {muted_text_color()}; font-size: 11px;")
+                        ep_row.addWidget(dur_label)
+
+                    ep_row.addWidget(ep_label, 1)
+                    ep_row.addStretch()
+
+                    open_btn = PushButton(FIF.FOLDER, "")
                     open_btn.setToolTip("打开文件夹")
+                    open_btn.setFixedSize(32, 32)
                     fp = e.get("file_path", "")
                     if fp and os.path.exists(fp):
                         open_btn.clicked.connect(
@@ -278,17 +301,20 @@ class HistoryPage(SmoothScrollArea):
                         )
                     else:
                         open_btn.setEnabled(False)
-                    ep_layout.addWidget(open_btn)
+                    ep_row.addWidget(open_btn)
 
-                    del_btn = ToolButton(FIF.DELETE)
+                    del_btn = PushButton(FIF.DELETE, "")
                     del_btn.setToolTip("删除记录")
+                    del_btn.setFixedSize(32, 32)
                     tid = e.get("task_id", "")
                     del_btn.clicked.connect(
                         lambda checked=False, x=tid: self._delete_entry(x)
                     )
-                    ep_layout.addWidget(del_btn)
+                    ep_row.addWidget(del_btn)
 
-                    card_layout.addLayout(ep_layout)
+                    card_layout.addLayout(ep_row)
+                    if i < len(group) - 1:
+                        card_layout.addSpacing(2)
 
                 self.cards_layout.addWidget(card)
 

@@ -58,9 +58,8 @@ class WorkerMixin:
         return worker
 
     def _collect_finished_workers(self):
-        """Drop refs to workers whose threads have fully terminated."""
-        self._workers = [w for w in self._workers if w.isRunning()]
-        self._zombie_workers = [w for w in self._zombie_workers if w.isRunning()]
+        self._workers = [w for w in self._workers if w.isRunning()][-200:]
+        self._zombie_workers = [w for w in self._zombie_workers if w.isRunning()][-200:]
 
     @staticmethod
     def _disconnect_worker(worker: QThread):

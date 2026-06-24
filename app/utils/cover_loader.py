@@ -5,6 +5,7 @@ connections across repeated cover loads, reducing latency and system resource
 usage.  An in-memory LRU cache avoids redundant network requests for the same
 URL (e.g. when re-entering a page that shows the same covers).
 """
+import threading
 from functools import lru_cache
 
 import httpx
@@ -16,6 +17,9 @@ _HTTP = httpx.Client(
     follow_redirects=True,
     limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
 )
+
+# Limit concurrent cover-load threads to avoid thread explosion in batch mode
+_COVER_SEM = threading.BoundedSemaphore(6)
 
 # In-memory LRU cache for cover image bytes (up to 200 entries ≈ ~50 MB).
 @lru_cache(maxsize=200)
@@ -40,6 +44,8 @@ class CoverLoader(QThread):
         self.key = key
 
     def run(self):
+        if not _COVER_SEM.acquire(timeout=30):
+            return
         try:
             data = _fetch_cover(self.url)
             if data and not self.isInterruptionRequested():
@@ -48,4 +54,6 @@ class CoverLoader(QThread):
                 else:
                     self.loaded.emit(data)
         except httpx.HTTPError:
-            pass  # cover loading is best-effort; failure is non-critical
+            pass
+        finally:
+            _COVER_SEM.release()
