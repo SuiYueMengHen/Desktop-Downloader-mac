@@ -1,0 +1,41 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+*.pyo
+.pytest_cache/
+
+# ── Virtual environments ──
+venv/
+.venv/
+env/
+.env/
+
+# ── IDE / Editor ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Build artifacts ──
+dist/
+build/
+*.dmg
+
+# Generated spec files (the main spec is tracked separately)
+*.spec
+!Desktop\ Downloader.spec
+
+# ── Project specific ──
+# Downloads, user data
+*.log
+
+# Temporary ffmpeg downloads (the binary itself is tracked)
+bin/ffmpeg*
+!bin/ffmpeg
+
+# OS metadata
+.DS_Store
+Thumbs.db
