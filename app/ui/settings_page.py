@@ -68,7 +68,7 @@ class SettingsPage(SmoothScrollArea):
 
     # ── Build UI ──
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         self.container = QFrame(self)
         self.container.setObjectName("settingsContainer")
         self.setWidget(self.container)
@@ -96,7 +96,7 @@ class SettingsPage(SmoothScrollArea):
     #  下载设置
     # ══════════════════════════════════════════════════
 
-    def _add_download_card(self):
+    def _add_download_card(self) -> None:
         card = CardWidget(self.container)
         layout = QVBoxLayout(card)
         layout.setSpacing(12)
@@ -213,7 +213,7 @@ class SettingsPage(SmoothScrollArea):
     #  下载调度
     # ══════════════════════════════════════════════════
 
-    def _add_schedule_card(self):
+    def _add_schedule_card(self) -> None:
         card = CardWidget(self.container)
         layout = QVBoxLayout(card)
         layout.setSpacing(12)
@@ -272,7 +272,7 @@ class SettingsPage(SmoothScrollArea):
     #  账号管理
     # ══════════════════════════════════════════════════
 
-    def _add_account_card(self):
+    def _add_account_card(self) -> None:
         card = CardWidget(self.container)
         layout = QVBoxLayout(card)
         layout.setSpacing(12)
@@ -306,7 +306,7 @@ class SettingsPage(SmoothScrollArea):
     #  外观
     # ══════════════════════════════════════════════════
 
-    def _add_appearance_card(self):
+    def _add_appearance_card(self) -> None:
         card = CardWidget(self.container)
         layout = QVBoxLayout(card)
         layout.setSpacing(12)
@@ -342,7 +342,7 @@ class SettingsPage(SmoothScrollArea):
     #  关于
     # ══════════════════════════════════════════════════
 
-    def _add_about_card(self):
+    def _add_about_card(self) -> None:
         card = CardWidget(self.container)
         layout = QVBoxLayout(card)
         layout.setSpacing(12)
@@ -374,50 +374,50 @@ class SettingsPage(SmoothScrollArea):
 
     # ── Slots ──
 
-    def _on_transcode_changed(self, index: int):
+    def _on_transcode_changed(self, index: int) -> None:
         data = self.transcode_combo.itemData(index)
         self.config.post_download_transcode = data or "none"
         self.transcode_changed.emit(data or "none")
 
-    def _on_tray_toggled(self, enabled: bool):
+    def _on_tray_toggled(self, enabled: bool) -> None:
         self.config.minimize_to_tray = enabled
         self.tray_toggled.emit(enabled)
 
-    def _on_speed_limit_changed(self, value: int):
+    def _on_speed_limit_changed(self, value: int) -> None:
         self.config.download_speed_limit = value
         self.speed_limit_changed.emit(value)
 
-    def _on_clipboard_toggled(self, enabled: bool):
+    def _on_clipboard_toggled(self, enabled: bool) -> None:
         self.config.clipboard_monitor_enabled = enabled
         mw = self.window()
         if hasattr(mw, 'clipboard_monitor'):
             mw.clipboard_monitor.set_enabled(enabled)
 
-    def _on_notification_toggled(self, enabled: bool):
+    def _on_notification_toggled(self, enabled: bool) -> None:
         self.config.notification_enabled = enabled
         self.sound_switch.setEnabled(enabled)
 
-    def _on_sound_toggled(self, enabled: bool):
+    def _on_sound_toggled(self, enabled: bool) -> None:
         self.config.notification_sound = enabled
 
-    def _on_startup_animation_toggled(self, enabled: bool):
+    def _on_startup_animation_toggled(self, enabled: bool) -> None:
         self.config.startup_animation = enabled
 
-    def _on_schedule_enabled_changed(self, enabled: bool):
+    def _on_schedule_enabled_changed(self, enabled: bool) -> None:
         self.config.schedule_enabled = enabled
         self.schedule_changed.emit()
 
-    def _on_schedule_time_changed(self):
+    def _on_schedule_time_changed(self) -> None:
         self.config.schedule_start = f"{self.start_picker.hour():02d}:{self.start_picker.minute():02d}"
         self.config.schedule_end = f"{self.end_picker.hour():02d}:{self.end_picker.minute():02d}"
         self.schedule_changed.emit()
 
-    def _on_schedule_days_changed(self):
+    def _on_schedule_days_changed(self) -> None:
         days = [i for i, cb in enumerate(self.day_checkboxes) if cb.isChecked()]
         self.config.schedule_days = days
         self.schedule_changed.emit()
 
-    def _browse_path(self):
+    def _browse_path(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择下载目录", self.path_input.text())
         if path:
             self.path_input.setText(path)
@@ -429,17 +429,17 @@ class SettingsPage(SmoothScrollArea):
                 parent=self.window(),
             )
 
-    def _save_path(self):
+    def _save_path(self) -> None:
         path = self.path_input.text().strip()
         if path:
             self.config.download_path = path
 
-    def _on_concurrent_changed(self):
+    def _on_concurrent_changed(self) -> None:
         value = self.concurrent_slider.value()
         self.config.max_concurrent_downloads = value
         self.concurrent_changed.emit(value)
 
-    def _on_theme_changed(self, text: str):
+    def _on_theme_changed(self, text: str) -> None:
         mode = {"自动": "auto", "浅色": "light", "深色": "dark"}.get(text, "auto")
         self.config.theme_mode = mode
         if mode == "dark":
@@ -449,19 +449,19 @@ class SettingsPage(SmoothScrollArea):
         else:
             setTheme(Theme.AUTO, lazy=True)
 
-    def _on_quick_toggle(self):
+    def _on_quick_toggle(self) -> None:
         toggleTheme()
         new_mode = "dark" if isDarkTheme() else "light"
         self.config.theme_mode = new_mode
         rev = {"dark": "深色", "light": "浅色"}
         self.theme_combo.setCurrentText(rev.get(new_mode, "自动"))
 
-    def _open_bilibili_login(self):
+    def _open_bilibili_login(self) -> None:
         dialog = BilibiliLoginDialog(self.window())
         dialog.login_successful.connect(self._on_bilibili_login_success)
         dialog.exec()
 
-    def _on_bilibili_login_success(self, creds: dict):
+    def _on_bilibili_login_success(self, creds: dict) -> None:
         self.bilibili_status.setText("已登录")
         self.bilibili_status.setStyleSheet("color: #27ae60; font-size: 13px;")
         self.bilibili_logout_btn.setVisible(True)
@@ -469,7 +469,7 @@ class SettingsPage(SmoothScrollArea):
         if hasattr(mw, 'bilibili') and hasattr(mw.bilibili, 'refresh_credential'):
             mw.bilibili.refresh_credential()
 
-    def _clear_bilibili_cookie(self):
+    def _clear_bilibili_cookie(self) -> None:
         self.cookie_manager.clear_bilibili()
         self.bilibili_status.setText("未登录")
         self.bilibili_status.setStyleSheet("color: #e74c3c; font-size: 13px;")

@@ -26,12 +26,9 @@ class AsyncWorker(QThread):
     async def work(self):
         raise NotImplementedError
 
-    def run(self):
+    def run(self) -> None:
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(self.work())
-            loop.close()
+            result = asyncio.run(self.work())
             if not self.isInterruptionRequested():
                 self.finished.emit(result)
         except Exception as e:

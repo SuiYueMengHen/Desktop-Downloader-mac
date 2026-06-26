@@ -1,11 +1,6 @@
 """
 Download list page showing active and completed downloads with progress.
 """
-import os
-import subprocess
-import platform as _platform
-from typing import Optional
-
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QColor
 from PySide6.QtWidgets import (
@@ -20,7 +15,7 @@ from qfluentwidgets import (
 )
 
 from app.download_manager import DownloadProgress
-from app.utils.helpers import format_size, format_speed, muted_text_color, secondary_text_color, configure_smooth_scroll
+from app.utils.helpers import format_size, format_speed, muted_text_color, secondary_text_color, configure_smooth_scroll, open_download_folder
 
 
 class DownloadItemCard(CardWidget):
@@ -114,7 +109,7 @@ class DownloadItemCard(CardWidget):
 
         layout.addLayout(btn_layout)
 
-    def update_progress(self, progress: DownloadProgress):
+    def update_progress(self, progress: DownloadProgress) -> None:
         """Update UI from DownloadProgress data."""
         self.progress_bar.setValue(int(progress.progress_pct))
 
@@ -174,7 +169,7 @@ class DownloadPage(SmoothScrollArea):
         self._setup_ui()
         configure_smooth_scroll(self)
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         """Build the download page UI."""
         self.container = QFrame(self)
         self.container.setObjectName("downloadContainer")
@@ -218,7 +213,7 @@ class DownloadPage(SmoothScrollArea):
 
         self.vBoxLayout.addStretch()
 
-    def add_card(self, task_id: str, filename: str, platform: str = ""):
+    def add_card(self, task_id: str, filename: str, platform: str = "") -> None:
         """Add a new download item card."""
         card = DownloadItemCard(task_id, filename, platform)
         card.pause_clicked.connect(self._on_pause)
@@ -230,7 +225,7 @@ class DownloadPage(SmoothScrollArea):
         self.cards_layout.addWidget(card)
         self.desc_label.hide()
 
-    def update_progress(self, progress: DownloadProgress):
+    def update_progress(self, progress: DownloadProgress) -> None:
         """Update progress for a task (called from DownloadManager)."""
         if progress.task_id not in self._cards:
             # First time seeing this task - add card
@@ -244,7 +239,7 @@ class DownloadPage(SmoothScrollArea):
         if card:
             card.update_progress(progress)
 
-    def on_download_completed(self, progress: DownloadProgress):
+    def on_download_completed(self, progress: DownloadProgress) -> None:
         """Called when a download completes."""
         card = self._cards.get(progress.task_id)
         if card:
@@ -260,7 +255,7 @@ class DownloadPage(SmoothScrollArea):
             parent=self.window(),
         )
 
-    def on_download_error(self, progress: DownloadProgress):
+    def on_download_error(self, progress: DownloadProgress) -> None:
         """Called when a download errors."""
         card = self._cards.get(progress.task_id)
         if card:
@@ -276,13 +271,13 @@ class DownloadPage(SmoothScrollArea):
             parent=self.window(),
         )
 
-    def _on_pause(self, task_id: str):
+    def _on_pause(self, task_id: str) -> None:
         """Handle pause/resume."""
         mw = self.window()
         if hasattr(mw, 'download_manager'):
             mw.download_manager.pause_task(task_id)
 
-    def _on_retry(self, task_id: str):
+    def _on_retry(self, task_id: str) -> None:
         """Re-queue a failed download task."""
         mw = self.window()
         if not hasattr(mw, 'download_manager'):
@@ -302,34 +297,23 @@ class DownloadPage(SmoothScrollArea):
                     )
                 break
 
-    def _on_open_folder(self, task_id: str):
+    def _on_open_folder(self, task_id: str) -> None:
         """Open the folder containing the downloaded file."""
         card = self._cards.get(task_id)
         if card and card._output_file:
-            folder = os.path.dirname(card._output_file)
-            if os.path.exists(folder):
-                if _platform.system() == "Darwin":
-                    subprocess.run(["open", folder], check=False)
-                else:
-                    os.startfile(folder)
-            elif os.path.exists(card._output_file):
-                folder2 = os.path.dirname(card._output_file)
-                if _platform.system() == "Darwin":
-                    subprocess.run(["open", folder2], check=False)
-                else:
-                    os.startfile(folder2)
+            open_download_folder(card._output_file)
 
-    def on_task_added(self, tid: str, filename: str, platform: str):
+    def on_task_added(self, tid: str, filename: str, platform: str) -> None:
         """Create a pre-waiting card when a task is queued."""
         if tid not in self._cards:
             self.add_card(tid, filename, platform)
 
-    def _on_stop_all(self):
+    def _on_stop_all(self) -> None:
         mw = self.window()
         if hasattr(mw, 'download_manager'):
             mw.download_manager.stop_all()
 
-    def _on_cancel_all(self):
+    def _on_cancel_all(self) -> None:
         mw = self.window()
         if hasattr(mw, 'download_manager'):
             mw.download_manager.cancel_all()
@@ -340,12 +324,12 @@ class DownloadPage(SmoothScrollArea):
         if not self._cards:
             self.desc_label.show()
 
-    def _on_start_all(self):
+    def _on_start_all(self) -> None:
         mw = self.window()
         if hasattr(mw, 'download_manager'):
             mw.download_manager.resume_all()
 
-    def _on_remove(self, task_id: str):
+    def _on_remove(self, task_id: str) -> None:
         """Handle remove card."""
         mw = self.window()
         if hasattr(mw, 'download_manager'):

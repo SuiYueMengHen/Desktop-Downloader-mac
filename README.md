@@ -52,10 +52,10 @@ pyinstaller "Desktop Downloader.spec"
 构建产物位于 `dist/Desktop Downloader.app`。可用 `create-dmg` 或 `hdiutil` 进一步打包为 `.dmg`。
 
 ```bash
-hdiutil create -volname "Desktop Downloader v1.0.2-alpha.2" \
+hdiutil create -volname "Desktop Downloader v1.0.3" \
   -srcfolder "dist/Desktop Downloader.app" \
   -ov -format UDZO \
-  "Desktop Downloader v1.0.2-alpha.2.dmg"
+  "Desktop Downloader v1.0.3.dmg"
 ```
 
 ## 使用说明
@@ -108,6 +108,14 @@ desktop-downloader/
 ```
 
 ## 更新记录
+
+### v1.0.3 (2026-06-26)
+
+**修复**
+- 🐞 暗色模式开屏图标/文字颜色 — `SplashOverlay` 在主题应用后刷新图标与文字色
+- 🐞 `WorkerMixin._safe_reset()` 崩溃 — CoverLoader (QRunnable) 误入 `_workers` 列表后 `isRunning()` 触发 `AttributeError`
+- 🐞 `home_page._clear_results()` 线程分类 — CoverLoader 转入 `_cover_loaders` 而非 `_workers`
+- 🐞 UP 主搜索跳转主页解析失败 — `_safe_reset()` 中 CoverLoader 导致解析中断
 
 ### v1.0.2-alpha.2 (2026-06-24)
 

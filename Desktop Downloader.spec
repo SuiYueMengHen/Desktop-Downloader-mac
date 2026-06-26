@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
-# v1.0.2-alpha.2 — Startup splash, batch import redesign, performance & UI polish
-# Changes: SplashOverlay FluentUI splash animation, BatchImportDialog redesign,
-#           theme-aware card hover, history multi-P card polish, smoother progress rings
+# v1.0.3 — Dark mode fixes, splash icon/text theme-awareness, cover-loader thread safety
+# Changes: splash icon refreshes on theme change, mute text color timing fix,
+#           WorkerMixin._safe_reset() CoverLoader safety, _clear_results() worker routing
 
 
 a = Analysis(

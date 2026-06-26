@@ -13,6 +13,8 @@ Eliminates 4x identical copies of _track_worker, _collect_finished_workers,
 _cancel_cover_loaders, and the cleanup-timer setup across HomePage, UpPage,
 CollectionPage, SearchPage.
 """
+import warnings
+
 from PySide6.QtCore import QThread, QTimer
 
 
@@ -58,8 +60,14 @@ class WorkerMixin:
         return worker
 
     def _collect_finished_workers(self):
-        self._workers = [w for w in self._workers if w.isRunning()][-200:]
-        self._zombie_workers = [w for w in self._zombie_workers if w.isRunning()][-200:]
+        self._workers = [
+            w for w in self._workers
+            if hasattr(w, 'isRunning') and w.isRunning()
+        ][-200:]
+        self._zombie_workers = [
+            w for w in self._zombie_workers
+            if hasattr(w, 'isRunning') and w.isRunning()
+        ][-200:]
 
     @staticmethod
     def _disconnect_worker(worker: QThread):
@@ -71,28 +79,37 @@ class WorkerMixin:
         for sig_name in ("loaded", "url_loaded", "finished", "error"):
             sig = getattr(worker, sig_name, None)
             if sig is not None:
-                try:
-                    sig.disconnect()
-                except (TypeError, RuntimeError):
-                    pass
-
-    def _cancel_cover_loaders(self):
-        """Disconnect and orphan running CoverLoader threads.
-
-        Uses _zombie_workers list to keep Python refs alive until threads
-        finish, preventing ~QThread crash.
-        """
-        for loader in list(self._cover_loaders):
-            for sig_name in ("url_loaded", "loaded"):
-                sig = getattr(loader, sig_name, None)
-                if sig is not None:
+                # CoverLoader QRunnable signals live on a proxy object,
+                # not directly on the worker — disconnect via proxy instead.
+                sigs_proxy = getattr(worker, "signals", None)
+                if sigs_proxy is not None:
+                    proxy_sig = getattr(sigs_proxy, sig_name, None)
+                    if proxy_sig is not None:
+                        try:
+                            proxy_sig.disconnect()
+                        except (TypeError, RuntimeError):
+                            pass
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
                     try:
                         sig.disconnect()
                     except (TypeError, RuntimeError):
                         pass
-            if loader.isRunning():
-                loader.requestInterruption()
-                self._zombie_workers.append(loader)
+
+    def _cancel_cover_loaders(self):
+        """Cancel and disconnect all active CoverLoader (QRunnable) instances."""
+        for loader in list(self._cover_loaders):
+            loader.cancel()
+            # QRunnable cannot own QObject signals — they live on the proxy.
+            signals = getattr(loader, "signals", None)
+            if signals is not None:
+                for sig_name in ("url_loaded", "loaded"):
+                    sig = getattr(signals, sig_name, None)
+                    if sig is not None:
+                        try:
+                            sig.disconnect()
+                        except (TypeError, RuntimeError):
+                            pass
         self._cover_loaders.clear()
 
     def _safe_reset(self):
@@ -104,22 +121,33 @@ class WorkerMixin:
         self._on_safe_reset()
         self._cancel_cover_loaders()
         for w in list(self._workers):
+            if not hasattr(w, 'isRunning'):
+                continue
             if w.isRunning():
                 self._disconnect_worker(w)
                 w.requestInterruption()
                 if w.isRunning():
                     self._zombie_workers.append(w)
         self._workers = []
-        self._zombie_workers = [w for w in self._zombie_workers if w.isRunning()]
+        self._zombie_workers = [
+            w for w in self._zombie_workers
+            if hasattr(w, 'isRunning') and w.isRunning()
+        ]
 
     def _on_safe_reset(self):
         """Override in subclasses to reset page-specific state before worker cleanup."""
         pass
 
+    def _is_running(self, obj) -> bool:
+        """Check if an object is still running (QThread or QRunnable)."""
+        if hasattr(obj, "isRunning"):
+            return obj.isRunning()
+        return not getattr(obj, "_cancelled", True)
+
     def is_busy(self) -> bool:
         """Return True if any workers or cover loaders are still running."""
-        return any(w.isRunning() for w in self._workers) or \
-               any(l.isRunning() for l in self._cover_loaders)
+        return any(self._is_running(w) for w in self._workers) or \
+               any(self._is_running(l) for l in self._cover_loaders)
 
     def on_page_left(self):
         """Called when user navigates away from this page.

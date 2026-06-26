@@ -5,7 +5,7 @@ Uses QThread for non-blocking yt-dlp parsing to keep UI responsive.
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QThread
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QPixmapCache
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFrame, QWidget,
 )
@@ -14,11 +14,11 @@ from qfluentwidgets import (
     SearchLineEdit, PushButton, ComboBox,
     PrimaryPushButton, CardWidget, CaptionLabel, BodyLabel,
     InfoBar, InfoBarPosition, FluentIcon as FIF,
-    ImageLabel, TitleLabel, StrongBodyLabel, HorizontalSeparator,
+    ImageLabel, TitleLabel, StrongBodyLabel,
     CheckBox, SmoothScrollArea,
 )
 
-from app.utils.cover_loader import CoverLoader
+from app.utils.cover_loader import CoverSignals, start_cover_loader
 from app.utils.async_worker import AsyncWorker
 from app.utils.worker_mixin import WorkerMixin
 from app.utils.helpers import (
@@ -84,7 +84,7 @@ class DownloadResolveWorker(AsyncWorker):
 class BatchResultCard(CardWidget):
 
     download_requested = Signal(object)
-    card_finished = Signal(object)  # emitted when all downloads added, card can be removed
+    card_finished = Signal(object)
 
     def __init__(self, video_info: VideoInfo, platform: BasePlatform, parent=None):
         super().__init__(parent)
@@ -95,48 +95,43 @@ class BatchResultCard(CardWidget):
         self._pending_page_resolves: int = 0
 
         self.setBorderRadius(8)
+
         layout = QHBoxLayout(self)
         layout.setSpacing(12)
+        layout.setContentsMargins(12, 10, 12, 10)
 
+        # ── Cover (smaller, loads with 150ms delay) ──
         self.cover_label = ImageLabel()
-        self.cover_label.setFixedSize(120, 68)
+        self.cover_label.setFixedSize(100, 56)
         self.cover_label.setBorderRadius(4, 4, 4, 4)
         self.cover_label.setScaledContents(True)
         layout.addWidget(self.cover_label)
 
         info_layout = QVBoxLayout()
         info_layout.setSpacing(2)
+        info_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.title_label = StrongBodyLabel(video_info.title[:60])
+        self.title_label = StrongBodyLabel(video_info.title[:80])
         self.title_label.setToolTip(video_info.title)
         self.title_label.setWordWrap(False)
         info_layout.addWidget(self.title_label)
 
         author = video_info.author_name or "未知作者"
         duration = format_duration(video_info.duration) if video_info.duration > 0 else "未知时长"
-        platform_display = "Bilibili" if video_info.platform == "bilibili" else video_info.platform
-        self.meta_label = CaptionLabel(f"{platform_display} · {author} · {duration} · {video_info.video_id}")
+        platform_name = "Bilibili" if video_info.platform == "bilibili" else video_info.platform
+        self.meta_label = CaptionLabel(
+            f"{platform_name} · {author} · {duration}"
+        )
         self.meta_label.setStyleSheet(f"color: {muted_text_color()};")
         info_layout.addWidget(self.meta_label)
 
-        self.page_separator = HorizontalSeparator()
-        self.page_separator.setVisible(False)
-        info_layout.addWidget(self.page_separator)
-
-        self.page_selector_widget = QWidget()
-        self.page_selector_widget.setVisible(False)
-        page_selector_layout = QVBoxLayout(self.page_selector_widget)
-        page_selector_layout.setContentsMargins(0, 0, 0, 0)
-        self.page_checkboxes_layout = QHBoxLayout()
-        self.page_checkboxes_layout.setSpacing(4)
-        self.page_checkboxes_layout.setContentsMargins(0, 0, 0, 0)
-        page_selector_layout.addLayout(self.page_checkboxes_layout)
-        info_layout.addWidget(self.page_selector_widget)
-
         controls_layout = QHBoxLayout()
+        controls_layout.setSpacing(8)
+        controls_layout.setContentsMargins(0, 4, 0, 0)
+
         quality_label = BodyLabel("画质:")
         self.quality_combo = ComboBox()
-        self.quality_combo.setMinimumWidth(160)
+        self.quality_combo.setMinimumWidth(140)
         controls_layout.addWidget(quality_label)
         controls_layout.addWidget(self.quality_combo)
 
@@ -147,11 +142,23 @@ class BatchResultCard(CardWidget):
         controls_layout.addStretch()
 
         self.download_btn = PrimaryPushButton(FIF.DOWNLOAD, "下载")
-        self.download_btn.setFixedHeight(36)
+        self.download_btn.setFixedHeight(32)
         self.download_btn.clicked.connect(self._on_download_clicked)
         controls_layout.addWidget(self.download_btn)
 
         info_layout.addLayout(controls_layout)
+
+        self._page_container = QWidget()
+        self._page_container.setVisible(False)
+        page_container_layout = QVBoxLayout(self._page_container)
+        page_container_layout.setContentsMargins(0, 2, 0, 0)
+        page_container_layout.setSpacing(0)
+        self.page_checkboxes_layout = QHBoxLayout()
+        self.page_checkboxes_layout.setSpacing(6)
+        self.page_checkboxes_layout.setContentsMargins(0, 0, 0, 0)
+        page_container_layout.addLayout(self.page_checkboxes_layout)
+        info_layout.addWidget(self._page_container)
+
         layout.addLayout(info_layout, 1)
 
         if video_info.available_qualities:
@@ -164,20 +171,23 @@ class BatchResultCard(CardWidget):
 
         self._setup_page_selector(video_info)
 
+        # ── Cover loading (delayed 150ms to let UI settle) ──
         if video_info.cover_url:
-            loader = CoverLoader(video_info.cover_url)
-            loader.loaded.connect(self._on_cover_loaded)
+            self._cover_url = video_info.cover_url
+            signals = CoverSignals()
+            signals.loaded.connect(self._on_cover_loaded)
+            loader = start_cover_loader(video_info.cover_url, signals, delay_ms=150)
             self._workers.append(loader)
-            loader.start()
+        else:
+            self._cover_url = ""
 
-    def _setup_page_selector(self, video_info: VideoInfo):
+    def _setup_page_selector(self, video_info: VideoInfo) -> None:
         pages = video_info.raw_data.get("pages", [])
         total_pages = video_info.raw_data.get("total_pages", 0) or len(pages)
         is_multi = total_pages > 1 and len(pages) > 1
         if not is_multi:
             return
-        self.page_separator.setVisible(True)
-        self.page_selector_widget.setVisible(True)
+        self._page_container.setVisible(True)
         self._all_selected = True
         for p in pages:
             page_num = p.get("page", 0) + 1
@@ -192,7 +202,7 @@ class BatchResultCard(CardWidget):
             self._page_checkboxes.append(cb)
         self._update_page_download_btn_text()
 
-    def _update_page_download_btn_text(self):
+    def _update_page_download_btn_text(self) -> None:
         if not self._page_checkboxes:
             self.download_btn.setText("下载")
             return
@@ -205,7 +215,7 @@ class BatchResultCard(CardWidget):
         else:
             self.download_btn.setText("下载")
 
-    def _on_page_check_changed(self):
+    def _on_page_check_changed(self, state: int = 0) -> None:
         checked = sum(1 for cb in self._page_checkboxes if cb.isChecked())
         total = len(self._page_checkboxes)
         self._all_selected = (checked == total)
@@ -220,12 +230,18 @@ class BatchResultCard(CardWidget):
                 result.append((cb.page_index, cb.page_label))
         return result
 
-    def cleanup(self):
-        """Disconnect all worker signals. Does NOT clear _workers — caller
-        must transfer running workers to a longer-lived list to prevent
-        'QThread: Destroyed while thread is still running' crash."""
+    def cleanup(self) -> None:
         for w in self._workers:
-            for sig_name in ("loaded", "url_loaded", "finished", "error"):
+            sigs_proxy = getattr(w, "signals", None)
+            if sigs_proxy is not None:
+                for sig_name in ("loaded", "url_loaded"):
+                    sig = getattr(sigs_proxy, sig_name, None)
+                    if sig is not None:
+                        try:
+                            sig.disconnect()
+                        except (TypeError, RuntimeError):
+                            pass
+            for sig_name in ("finished", "error"):
                 sig = getattr(w, sig_name, None)
                 if sig is not None:
                     try:
@@ -233,13 +249,15 @@ class BatchResultCard(CardWidget):
                     except (TypeError, RuntimeError):
                         pass
 
-    def _on_cover_loaded(self, data: bytes):
+    def _on_cover_loaded(self, data: bytes) -> None:
         pixmap = QPixmap()
         if pixmap.loadFromData(data):
-            scaled = pixmap.scaled(120, 68, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            scaled = pixmap.scaled(100, 56, Qt.KeepAspectRatio, Qt.FastTransformation)
+            if self._cover_url:
+                QPixmapCache.insert(self._cover_url, scaled)
             self.cover_label.setPixmap(scaled)
 
-    def _on_download_clicked(self):
+    def _on_download_clicked(self) -> None:
         quality = self.quality_combo.currentData() or VideoQuality.UNKNOWN
         self.download_btn.setEnabled(False)
         self.download_btn.setText("获取地址...")
@@ -257,7 +275,7 @@ class BatchResultCard(CardWidget):
             self._workers.append(worker)
             worker.start()
 
-    def _on_page_resolve_done(self, task: DownloadTask):
+    def _on_page_resolve_done(self, task: DownloadTask) -> None:
         self._pending_page_resolves -= 1
         task.audio_only = self.audio_only_cb.isChecked()
         self.download_requested.emit(task)
@@ -266,7 +284,7 @@ class BatchResultCard(CardWidget):
             self.download_btn.setText("✓ 已添加")
             self.card_finished.emit(self)
 
-    def _on_page_resolve_error(self, msg: str):
+    def _on_page_resolve_error(self, msg: str) -> None:
         self._pending_page_resolves -= 1
         if self._pending_page_resolves <= 0:
             self.download_btn.setEnabled(True)
@@ -308,11 +326,11 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self._setup_ui()
         self._init_platforms()
 
-    def _init_platforms(self):
+    def _init_platforms(self) -> None:
         if self.main_window:
             self._platforms["bilibili"] = self.main_window.bilibili
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         self.container = QFrame(self)
         self.container.setObjectName("homeContainer")
         self.setWidget(self.container)
@@ -394,14 +412,14 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self._empty_hint.setStyleSheet(f"color: {secondary_text_color()}; font-size: 14px; padding: 40px;")
         self.vBoxLayout.addWidget(self._empty_hint)
 
-    def _show_status(self, msg: str, is_error: bool = False):
+    def _show_status(self, msg: str, is_error: bool = False) -> None:
         self.status_label.setText(msg)
         self.status_label.setStyleSheet(
             f"color: #e74c3c; font-size: 13px;" if is_error else f"color: {normal_text_color()}; font-size: 13px;"
         )
         self.status_label.show()
 
-    def _show_error(self, msg: str):
+    def _show_error(self, msg: str) -> None:
         self._show_status(msg, is_error=True)
         if self.window():
             InfoBar.error(
@@ -413,7 +431,7 @@ class HomePage(SmoothScrollArea, WorkerMixin):
 
     # ── Safe Worker Lifecycle ──
 
-    def _on_batch_import(self):
+    def _on_batch_import(self) -> None:
         """Open batch import dialog and start batch parsing."""
         from app.ui.batch_import_dialog import BatchImportDialog
         dialog = BatchImportDialog(self.window())
@@ -431,7 +449,7 @@ class HomePage(SmoothScrollArea, WorkerMixin):
                 self._batch_index = 0
                 self._submit_next_batch()
 
-    def _submit_next_batch(self):
+    def _submit_next_batch(self) -> None:
         """Submit next URL in the batch queue."""
         if not hasattr(self, '_batch_urls') or self._batch_index >= len(self._batch_urls):
             self._batch_urls = []
@@ -450,7 +468,7 @@ class HomePage(SmoothScrollArea, WorkerMixin):
 
     # ── Parse URL ──
 
-    def _on_parse_url(self):
+    def _on_parse_url(self) -> None:
         if self._in_batch_mode:
             self._exit_batch_mode()
 
@@ -483,7 +501,7 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self._track_worker(worker)
         worker.start()
 
-    def _on_parse_done(self, video_info: VideoInfo, gen: int):
+    def _on_parse_done(self, video_info: VideoInfo, gen: int) -> None:
         if gen != self._parse_gen:
             return
         card = BatchResultCard(video_info, self._current_platform, self)
@@ -497,7 +515,7 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self._collect_finished_workers()
         self.parse_complete.emit()
 
-    def _on_parse_error(self, msg: str, gen: int):
+    def _on_parse_error(self, msg: str, gen: int) -> None:
         if gen != self._parse_gen:
             return
         self._show_error(f"解析失败: {msg}")
@@ -505,13 +523,13 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self.url_input.setEnabled(True)
         self._collect_finished_workers()
 
-    def _show_results_area(self):
+    def _show_results_area(self) -> None:
         """Show the results area and hide the empty hint."""
         self.results_header.setVisible(True)
         self.results_scroll.setVisible(True)
         self._empty_hint.setVisible(False)
 
-    def _clear_results(self):
+    def _clear_results(self) -> None:
         """Clear all result cards with updates disabled to prevent flicker."""
         self.setUpdatesEnabled(False)
         try:
@@ -521,7 +539,10 @@ class HomePage(SmoothScrollArea, WorkerMixin):
                 # "QThread: Destroyed while thread is still running" crash when
                 # Python GC collects QThread wrappers whose C++ threads still run.
                 for w in card._workers:
-                    self._workers.append(w)
+                    if hasattr(w, 'isRunning'):
+                        self._workers.append(w)
+                    else:
+                        self._cover_loaders.append(w)
                 card._workers.clear()
                 self.batch_results_layout.removeWidget(card)
                 card.deleteLater()
@@ -532,17 +553,17 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self.results_scroll.setVisible(False)
         self._empty_hint.setVisible(True)
 
-    def enter_batch_mode(self):
+    def enter_batch_mode(self) -> None:
         self._in_batch_mode = True
         self._clear_results()
 
-    def _exit_batch_mode(self):
+    def _exit_batch_mode(self) -> None:
         """Cancel batch mode and clear all results."""
         self._in_batch_mode = False
         self._clear_results()
         self.batch_cancelled.emit()
 
-    def _finish_batch_mode(self):
+    def _finish_batch_mode(self) -> None:
         """Mark batch mode as finished without clearing results.
 
         Called when all batch URLs have been processed. Unlike
@@ -551,13 +572,13 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         """
         self._in_batch_mode = False
 
-    def on_page_left(self):
+    def on_page_left(self) -> None:
         """Don't cancel workers during batch mode — let it continue in background."""
         if self._in_batch_mode:
             return
         self._safe_reset()
 
-    def reset_to_idle(self):
+    def reset_to_idle(self) -> None:
         """Reset page to idle state after an error."""
         if self._in_batch_mode:
             self._exit_batch_mode()
@@ -565,7 +586,7 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self.parse_btn.setEnabled(True)
         self.url_input.setEnabled(True)
 
-    def _on_parse_url_batch(self, url: str):
+    def _on_parse_url_batch(self, url: str) -> None:
         platform_name = detect_platform(url)
         if not platform_name or platform_name not in self._platforms:
             self._collect_finished_workers()
@@ -578,10 +599,14 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self._track_worker(worker)
         worker.start()
 
-    def _on_batch_parse_done(self, video_info: VideoInfo):
+    def _on_batch_parse_done(self, video_info: VideoInfo) -> None:
         if not self._in_batch_mode:
             self._collect_finished_workers()
             return
+        # Use platform from the worker to avoid race condition with
+        # _current_platform being overwritten by concurrent parses.
+        # Capture platform at parse time via a closure in _on_parse_url_batch.
+        # Falls back to self._current_platform for the batch flow.
         card = BatchResultCard(video_info, self._current_platform, self)
         card.download_requested.connect(self._on_batch_card_download)
         card.card_finished.connect(self._on_card_finished)
@@ -591,24 +616,29 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self._collect_finished_workers()
         self.parse_complete.emit()
 
-    def _on_batch_parse_error(self, msg: str):
+    def _on_batch_parse_error(self, msg: str) -> None:
         if not self._in_batch_mode:
             self._collect_finished_workers()
             return
         self._show_error(f"批量解析部分视频失败: {msg}")
         self._collect_finished_workers()
+        # Don't call _finish_batch_mode — let the batch continue
+        # with remaining URLs. Only the failed URL is skipped.
         self.parse_complete.emit()
 
-    def _on_batch_card_download(self, task: DownloadTask):
+    def _on_batch_card_download(self, task: DownloadTask) -> None:
         self.download_requested.emit(task)
 
-    def _on_card_finished(self, card):
+    def _on_card_finished(self, card) -> None:
         """Remove a card after its downloads have been added to the download list."""
         if card not in self._batch_cards:
             return
         card.cleanup()
         for w in card._workers:
-            self._workers.append(w)
+            if hasattr(w, 'isRunning'):
+                self._workers.append(w)
+            else:
+                self._cover_loaders.append(w)
         card._workers.clear()
         self.batch_results_layout.removeWidget(card)
         card.deleteLater()

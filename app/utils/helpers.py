@@ -4,6 +4,7 @@ Helper utilities.
 import os
 import re
 import platform
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -145,10 +146,10 @@ def configure_smooth_scroll(scroll_area) -> None:
     # Shorter animation for snappier feel (default is 500ms which feels sluggish)
     if hasattr(scroll_area, 'setScrollAnimation'):
         scroll_area.setScrollAnimation(
-            Qt.Vertical, 250, QEasingCurve.OutCubic
+            Qt.Vertical, 100, QEasingCurve.OutCubic
         )
         scroll_area.setScrollAnimation(
-            Qt.Horizontal, 250, QEasingCurve.OutCubic
+            Qt.Horizontal, 100, QEasingCurve.OutCubic
         )
 
     # Finer scroll steps for trackpad precision
@@ -167,3 +168,31 @@ def configure_smooth_scroll(scroll_area) -> None:
 
     # Ensure the scroll area doesn't eat trackpad events
     scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+
+def format_count(n: int) -> str:
+    """Format large numbers: 1234 -> 1234, 12345 -> 1.2万"""
+    if n >= 10000:
+        return f"{n/10000:.1f}万"
+    return str(n)
+
+
+def open_download_folder(path: str = None) -> None:
+    """Open the folder containing the given file in the file manager.
+
+    Args:
+        path: Path to a file or directory. If None, does nothing.
+    """
+    if not path:
+        return
+
+    if os.path.isdir(path):
+        target = path
+    else:
+        target = os.path.dirname(path)
+
+    if os.path.exists(target):
+        if platform.system() == "Darwin":
+            subprocess.run(["open", target], check=False)
+        else:
+            os.startfile(target)

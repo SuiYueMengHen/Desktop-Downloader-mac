@@ -1,130 +1,187 @@
-"""
-Batch import dialog - paste multiple URLs for batch parsing.
-Redesigned with URL count badge, paste detection, clear/dedup, and better styling.
-"""
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget
 
 from qfluentwidgets import (
-    Dialog, CaptionLabel, PrimaryPushButton, PushButton,
-    FluentIcon as FIF, PlainTextEdit, BodyLabel,
-    InfoBar, InfoBarPosition, HorizontalSeparator,
+    Dialog, CaptionLabel,
+    FluentIcon as FIF, PlainTextEdit,
+    TransparentToolButton, isDarkTheme,
 )
 
-from app.utils.helpers import muted_text_color, secondary_text_color
+from app.utils.helpers import secondary_text_color, normal_text_color
+
+
+class AnimatedCountBadge(QWidget):
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._current_count = 0
+
+        self.label = CaptionLabel("0")
+        self.label.setFixedSize(40, 22)
+        self.label.setAlignment(Qt.AlignCenter)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.label)
+
+    def set_count(self, count: int):
+        if count == self._current_count:
+            return
+        self._current_count = count
+        text = f"{count}" if count > 0 else "0"
+        self.label.setText(text)
+
+    def reset(self):
+        self._current_count = 0
+        self.label.setText("0")
+
+class StatusLabel(CaptionLabel):
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setVisible(False)
+        self._fade_timer = QTimer(self)
+        self._fade_timer.setSingleShot(True)
+        self._fade_timer.timeout.connect(lambda: self.setVisible(False))
+
+    def show_message(self, text: str, duration_ms: int = 2000):
+        self.setText(text)
+        self.setVisible(True)
+        self._fade_timer.start(duration_ms)
 
 
 class BatchImportDialog(Dialog):
-    """Dialog for pasting multiple video URLs (one per line)."""
 
     def __init__(self, parent=None):
         super().__init__("批量导入链接", "", parent)
         self.setMinimumWidth(540)
         self.setMaximumWidth(640)
-        self.setMinimumHeight(440)
+        self.setMinimumHeight(460)
 
         self.yesButton.setText("开始解析")
         self.cancelButton.setText("取消")
+        self.yesButton.setIcon(FIF.DOWNLOAD)
+
+        # Hide default Dialog labels — we build custom UI
+        self.titleLabel.hide()
+        self.contentLabel.hide()
+        self.windowTitleLabel.hide()
+        # Tighten button area — transparent, no fixed height, no top margin to touch text edit
+        self.buttonGroup.setStyleSheet("background: transparent; border: none;")
+        self.buttonGroup.setMinimumHeight(0)
+        self.buttonGroup.setMaximumHeight(16777215)
+        self.buttonLayout.setContentsMargins(24, 4, 24, 8)
 
         self._setup_ui()
+        # Our layout stretches to fill; collapse empty textLayout (margins+spacing→0, stretch→0)
+        self.vBoxLayout.setStretch(0, 1)
+        for i in range(self.vBoxLayout.count()):
+            item = self.vBoxLayout.itemAt(i)
+            if item and item.layout() is not None and i != 0:
+                empty = item.layout()
+                empty.setContentsMargins(0, 0, 0, 0)
+                empty.setSpacing(0)
+                self.vBoxLayout.setStretch(i, 0)
+                break
         self._connect_signals()
         self._update_count()
 
     def _setup_ui(self):
-        self.contentLabel.hide()
-
         layout = QVBoxLayout()
         layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        # ── Header area ──
-        header_row = QHBoxLayout()
-        hint = BodyLabel("粘贴多个视频链接，每个链接一行：")
-        hint.setStyleSheet("font-size: 14px;")
-
-        self.count_badge = CaptionLabel("0 个链接")
-        self.count_badge.setStyleSheet(
-            "background-color: #6c5ce7; color: white; "
-            "padding: 2px 12px; border-radius: 10px; font-size: 11px;"
-        )
-        self.count_badge.setVisible(False)
-
-        header_row.addWidget(hint)
-        header_row.addStretch()
-        header_row.addWidget(self.count_badge)
-        layout.addLayout(header_row)
-
-        # ── Toolbar ──
         toolbar = QHBoxLayout()
-        toolbar.setSpacing(6)
+        toolbar.setSpacing(2)
 
-        paste_btn = PrimaryPushButton(FIF.PASTE, "粘贴")
+        paste_btn = TransparentToolButton(FIF.PASTE)
         paste_btn.setToolTip("从剪贴板粘贴链接")
         paste_btn.clicked.connect(self._paste_from_clipboard)
 
-        clear_btn = PushButton(FIF.DELETE, "清空")
+        clear_btn = TransparentToolButton(FIF.DELETE)
         clear_btn.setToolTip("清空所有已输入的链接")
         clear_btn.clicked.connect(self._clear_text)
 
-        dedup_btn = PushButton(FIF.CANCEL, "去重")
+        dedup_btn = TransparentToolButton(FIF.CANCEL)
         dedup_btn.setToolTip("移除重复的链接")
         dedup_btn.clicked.connect(self._deduplicate)
 
-        self.paste_hint = CaptionLabel("")
-        self.paste_hint.setStyleSheet(f"color: {secondary_text_color()};")
+        self.status_label = StatusLabel()
+        self.status_label.setStyleSheet(f"color: {secondary_text_color()};")
+
+        self.count_badge = AnimatedCountBadge()
 
         toolbar.addWidget(paste_btn)
         toolbar.addWidget(clear_btn)
         toolbar.addWidget(dedup_btn)
         toolbar.addStretch()
-        toolbar.addWidget(self.paste_hint)
+        toolbar.addWidget(self.status_label)
+        toolbar.addSpacing(4)
+        toolbar.addWidget(self.count_badge)
+
         layout.addLayout(toolbar)
 
-        layout.addSpacing(4)
-
-        # ── Text edit ──
         self.text_edit = PlainTextEdit()
         self.text_edit.setPlaceholderText(
             "粘贴 Bilibili 视频链接，一行一个\n\n"
             "例如:\n"
             "https://www.bilibili.com/video/BV1xx411c7mD\n"
             "https://www.bilibili.com/video/BV2yy411d8nE\n"
-            "https://www.bilibili.com/video/BV3zz411e9oF\n\n"
-            "支持格式:\n"
-            "  • bilibili.com/video/BV...\n"
-            "  • b23.tv/XXXXX (短链接)"
         )
         self.text_edit.setMinimumHeight(200)
+        text_color = "#fff" if isDarkTheme() else "#000"
+        placeholder_color = "#999" if isDarkTheme() else "#888"
+        self.text_edit.setStyleSheet(f"""
+            PlainTextEdit {{
+                color: {text_color};
+                border: 1px solid transparent;
+                border-radius: 8px;
+                padding: 14px 16px;
+                background-color: transparent;
+                font-size: 13px;
+            }}
+            PlainTextEdit:focus {{
+                border: 1px solid transparent;
+            }}
+        """)
 
-        # Auto-count via signal
+        edit_container = QWidget()
+        edit_container.setStyleSheet(
+            "background-color: transparent;"
+            "border: 1px solid rgba(0, 0, 0, 0.08);"
+            "border-radius: 8px;"
+        )
+        edit_layout = QVBoxLayout(edit_container)
+        edit_layout.setContentsMargins(0, 0, 0, 0)
+        edit_layout.addWidget(self.text_edit)
+
         self.text_edit.textChanged.connect(self._update_count)
-
-        layout.addWidget(self.text_edit, 1)
-
-        # ── Footer hint ──
-        layout.addSpacing(4)
-        footer = CaptionLabel("以 # 开头的行会被忽略（注释行）")
-        footer.setStyleSheet(f"color: {muted_text_color()};")
-        layout.addWidget(footer)
+        layout.addWidget(edit_container, 1)
 
         self.vBoxLayout.insertLayout(0, layout)
 
     def _connect_signals(self):
-        pass  # text_changed connected inline
+        pass
 
     def _paste_from_clipboard(self):
         from PySide6.QtGui import QGuiApplication
         clipboard = QGuiApplication.clipboard()
         text = clipboard.text()
         if text:
+            old_len = len(self.get_urls())
             self.text_edit.setPlainText(
                 self.text_edit.toPlainText() + ("\n" if self.text_edit.toPlainText() else "") + text
             )
-            self.paste_hint.setText("已粘贴")
-            QTimer.singleShot(2000, lambda: self.paste_hint.setText(""))
+            new_count = len(self.get_urls())
+            added = new_count - old_len
+            if added > 0:
+                self.status_label.show_message(f"已粘贴 {added} 个链接", 2000)
+            else:
+                self.status_label.show_message("已粘贴", 1500)
 
     def _clear_text(self):
         self.text_edit.clear()
-        self.paste_hint.setText("")
+        self.status_label.show_message("", 0)
 
     def _deduplicate(self):
         lines = self.text_edit.toPlainText().splitlines()
@@ -135,18 +192,18 @@ class BatchImportDialog(Dialog):
             if stripped not in seen:
                 seen.add(stripped)
                 unique.append(line)
+        removed = len(lines) - len(unique)
         self.text_edit.setPlainText("\n".join(unique))
-        self.paste_hint.setText(f"已移除 {len(lines) - len(unique)} 个重复链接")
+        if removed > 0:
+            self.status_label.show_message(
+                f"已移除 {removed} 个重复链接", 2000
+            )
+        else:
+            self.status_label.show_message("无重复链接", 1500)
 
     def _update_count(self):
-        text = self.text_edit.toPlainText()
-        urls = [line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
-        count = len(urls)
-        if count > 0:
-            self.count_badge.setText(f"{count} 个链接")
-            self.count_badge.setVisible(True)
-        else:
-            self.count_badge.setVisible(False)
+        count = len(self.get_urls())
+        self.count_badge.set_count(count)
 
     def get_urls(self) -> list[str]:
         """Return list of non-empty trimmed URLs from the text input."""

@@ -9,7 +9,6 @@ import asyncio
 import traceback
 from typing import Optional
 
-import yt_dlp
 from bilibili_api import video as bili_video
 from bilibili_api import user as bili_user
 from bilibili_api import channel_series
@@ -17,13 +16,11 @@ from bilibili_api import search as bili_search
 from bilibili_api import Credential
 from bilibili_api.utils.utils import get_api
 from bilibili_api.utils.network import Api
-from bilibili_api.exceptions.NetworkException import NetworkException
-
 from app.platforms.base import BasePlatform, VideoInfo, VideoQuality, MediaStream
 from app.cookie_manager import CookieManager
 
 
-def _log_error(msg: str, exc: Exception = None):
+def _log_error(msg: str, exc: Exception = None) -> None:
     """Print error to terminal (stderr) for debugging."""
     print(f"[ERROR] {msg}", file=sys.stderr, flush=True)
     if exc:
@@ -109,7 +106,7 @@ class BilibiliPlatform(BasePlatform):
             return Credential(sessdata=sess, bili_jct=jct, buvid3=buvid or "")
         return Credential()
 
-    def refresh_credential(self):
+    def refresh_credential(self) -> None:
         """Rebuild credential from stored cookies (reload from config)."""
         self._credential = self._build_credential()
 
@@ -151,8 +148,11 @@ class BilibiliPlatform(BasePlatform):
                 ".bilibili.com\tTRUE\t/\tFALSE\t1735689600\tbili_jct\t" + jct,
                 ".bilibili.com\tTRUE\t/\tFALSE\t1735689600\tbuvid3\t" + (buvid or ""),
             ]
-            cookie_path.write_text("\n".join(lines), encoding="utf-8")
-            opts['cookiefile'] = str(cookie_path)
+            try:
+                cookie_path.write_text("\n".join(lines), encoding="utf-8")
+                opts['cookiefile'] = str(cookie_path)
+            except OSError as e:
+                print(f"Failed to write bilibili cookies to {cookie_path}: {e}")
         return opts
 
     async def parse_url(self, url: str) -> VideoInfo:
@@ -172,8 +172,10 @@ class BilibiliPlatform(BasePlatform):
 
         # Detect available qualities directly from DASH data
         qualities = [VideoQuality.UNKNOWN]
+        _dash_cache = None
         try:
             url_data = await v.get_download_url(page_index=0)
+            _dash_cache = url_data
             if "dash" in url_data:
                 dash = url_data["dash"]
                 seen_ids = set()
@@ -204,6 +206,8 @@ class BilibiliPlatform(BasePlatform):
         raw["webpage_url"] = f"https://www.bilibili.com/video/{bvid}"
         raw["pages"] = pages
         raw["total_pages"] = total_pages
+        if _dash_cache:
+            raw["_dash_cache"] = _dash_cache
 
         return VideoInfo(
             platform=self.name, video_id=bvid, title=title,
@@ -220,7 +224,9 @@ class BilibiliPlatform(BasePlatform):
         bvid = video_info.video_id
         try:
             v = bili_video.Video(bvid=bvid, credential=self._credential)
-            url_data = await v.get_download_url(page_index=page_index)
+            url_data = video_info.raw_data.get("_dash_cache")
+            if url_data is None:
+                url_data = await v.get_download_url(page_index=page_index)
 
             if "dash" in url_data:
                 dash = url_data["dash"]
@@ -259,21 +265,6 @@ class BilibiliPlatform(BasePlatform):
             raise ValueError(f"获取Bilibili视频流失败: {e}")
 
         return streams
-
-    def get_format_spec_for_quality(self, quality: VideoQuality) -> str:
-        """Build yt-dlp format spec based on quality selection.
-        Since yt-dlp's Bilibili extractor has issues, we use a generic approach
-        or fallback to best quality."""
-        h_map = {
-            VideoQuality.UNKNOWN: 99999, VideoQuality.Q_144P: 144,
-            VideoQuality.Q_240P: 240, VideoQuality.Q_360P: 360,
-            VideoQuality.Q_480P: 480, VideoQuality.Q_540P: 540,
-            VideoQuality.Q_720P: 720, VideoQuality.Q_1080P: 1080,
-            VideoQuality.Q_1440P: 1440, VideoQuality.Q_2160P: 2160,
-        }
-        h = h_map.get(quality, 99999)
-        if h >= 99999: return "bv*+ba/best"
-        return f"bv*[height<={h}]+ba/best[height<={h}]"
 
     # ── Search methods ──
 
@@ -438,20 +429,6 @@ class BilibiliPlatform(BasePlatform):
             "count": total,
             "has_more": (current_page * current_size) < total,
         }
-
-    async def _api_retry(self, fn, *args, max_retries: int = 3, base_delay: float = 1.0, **kwargs):
-        """Call an async API function with retry on 412 errors."""
-        last_exc = None
-        for attempt in range(max_retries):
-            try:
-                return await fn(*args, **kwargs)
-            except NetworkException as e:
-                last_exc = e
-                if e.status == 412 and attempt < max_retries - 1:
-                    await asyncio.sleep(base_delay * (attempt + 1))
-                    continue
-                raise
-        raise last_exc
 
     async def get_uploader_info(self, uid: int) -> dict:
         """Fetch uploader profile info via bilibili-api.

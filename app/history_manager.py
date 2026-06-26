@@ -5,6 +5,7 @@ Batch saves are coalesced via a simple time-based debounce:
 repeated calls within 500ms produce only one disk write.
 """
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -22,35 +23,40 @@ class HistoryManager:
         self._history_file = self.config.config_dir / "history.json"
         self._entries: list[dict] = []
         self._last_save_time: float = 0.0
+        self._save_lock = threading.Lock()
         self.load()
 
     @property
     def history_file(self) -> Path:
         return self._history_file
 
-    def load(self):
+    def load(self) -> None:
         if self._history_file.exists():
             try:
                 with open(self._history_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    self._entries = data if isinstance(data, list) else []
+                    with self._save_lock:
+                        self._entries = data if isinstance(data, list) else []
             except (json.JSONDecodeError, OSError):
-                self._entries = []
+                with self._save_lock:
+                    self._entries = []
         else:
-            self._entries = []
+            with self._save_lock:
+                self._entries = []
 
-    def save(self):
+    def save(self) -> None:
         """Debounced write — coalesces burst calls into a single disk write."""
-        now = time.monotonic()
-        if now - self._last_save_time < _DEBOUNCE_S:
-            return  # skip — last write was recent
-        self._last_save_time = now
-        try:
-            self._history_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._history_file, "w", encoding="utf-8") as f:
-                json.dump(self._entries, f, indent=2, ensure_ascii=False)
-        except OSError:
-            pass
+        with self._save_lock:
+            now = time.monotonic()
+            if now - self._last_save_time < _DEBOUNCE_S:
+                return  # skip — last write was recent
+            self._last_save_time = now
+            try:
+                self._history_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(self._history_file, "w", encoding="utf-8") as f:
+                    json.dump(self._entries, f, indent=2, ensure_ascii=False)
+            except OSError:
+                pass
 
     def add_entry(self, platform: str, video_id: str, title: str,
                   quality: str, file_path: str, file_size: int,
@@ -71,7 +77,8 @@ class HistoryManager:
             "page_count": page_count,
             "timestamp": time.time(),
         }
-        self._entries.insert(0, entry)  # newest first
+        with self._save_lock:
+            self._entries.insert(0, entry)  # newest first
         self.save()
         return task_id
 
@@ -97,6 +104,7 @@ class HistoryManager:
             return True
         return False
 
-    def clear_all(self):
-        self._entries = []
+    def clear_all(self) -> None:
+        with self._save_lock:
+            self._entries = []
         self.save()

@@ -3,10 +3,10 @@ UP主 space page - browse uploader info and paginated video list.
 """
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, QThread, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QThreadPool
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QFrame, QWidget, QGridLayout, QLabel,
+    QVBoxLayout, QHBoxLayout, QFrame, QWidget, QGridLayout,
     QStackedWidget,
 )
 
@@ -18,10 +18,10 @@ from qfluentwidgets import (
     SimpleCardWidget, SmoothScrollArea,
 )
 
-from app.utils.cover_loader import CoverLoader
+from app.utils.cover_loader import CoverLoader, CoverSignals
 from app.utils.async_worker import AsyncWorker
 from app.utils.worker_mixin import WorkerMixin
-from app.utils.helpers import format_duration, format_size, sanitize_filename, muted_text_color, secondary_text_color, normal_text_color, configure_smooth_scroll
+from app.utils.helpers import format_count, format_duration, format_size, muted_text_color, secondary_text_color, normal_text_color, configure_smooth_scroll
 from app.platforms.bilibili import BilibiliPlatform, extract_uid
 
 
@@ -50,13 +50,6 @@ class UpVideosWorker(AsyncWorker):
 
     async def work(self):
         return await self.platform.get_uploader_videos(self.uid, self.page, self.page_size)
-
-
-def format_count(n: int) -> str:
-    """Format large numbers: 1234 -> 1234, 12345 -> 1.2万"""
-    if n >= 10000:
-        return f"{n/10000:.1f}万"
-    return str(n)
 
 
 class VideoCard(CardWidget):
@@ -102,7 +95,7 @@ class VideoCard(CardWidget):
         self.parse_btn.clicked.connect(lambda: self.parse_clicked.emit(self._bvid))
         layout.addWidget(self.parse_btn)
 
-    def set_cover(self, data: bytes):
+    def set_cover(self, data: bytes) -> None:
         self._cover_data = data
         pixmap = QPixmap()
         if pixmap.loadFromData(data):
@@ -136,14 +129,14 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         WorkerMixin.__init_from__(self)
         configure_smooth_scroll(self)
 
-    def _init_platform(self):
+    def _init_platform(self) -> None:
         if self.main_window and hasattr(self.main_window, 'bilibili'):
             self._platform = self.main_window.bilibili
         else:
             from app.platforms.bilibili import BilibiliPlatform
             self._platform = BilibiliPlatform()
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         self.container = QFrame(self)
         self.container.setObjectName("upContainer")
         self.setWidget(self.container)
@@ -289,26 +282,26 @@ class UpPage(SmoothScrollArea, WorkerMixin):
 
         self.vBoxLayout.addStretch()
 
-    def _spin_progress(self):
+    def _spin_progress(self) -> None:
         # Loop 0→100→0→100... for indeterminate progress animation
         self._progress_value = (self._progress_value + 4) % 101
         self.progress_ring.setValue(self._progress_value)
         self.load_more_ring.setValue(self._progress_value)
 
-    def _show_loading(self, text: str):
+    def _show_loading(self, text: str) -> None:
         self.status_label.hide()
         self.loading_text.setText(text)
         self.content_stack.setCurrentIndex(1)
         self._progress_value = 0
         self._progress_timer.start()
 
-    def _hide_loading(self):
+    def _hide_loading(self) -> None:
         """Stop the spinning timer."""
         self._progress_timer.stop()
         self.progress_ring.setValue(0)
         self.load_more_ring.setValue(0)
 
-    def _show_status(self, msg: str, is_error: bool = False):
+    def _show_status(self, msg: str, is_error: bool = False) -> None:
         self._hide_loading()
         self.status_label.setText(msg)
         self.status_label.setStyleSheet(
@@ -316,7 +309,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         )
         self.status_label.show()
 
-    def _show_error(self, msg: str):
+    def _show_error(self, msg: str) -> None:
         self._show_status(msg, is_error=True)
         if self.window():
             InfoBar.error(
@@ -326,7 +319,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
                 parent=self.window(),
             )
 
-    def _on_safe_reset(self):
+    def _on_safe_reset(self) -> None:
         """Reset page-specific state before worker cleanup."""
         self._loading = False
         self._load_cancelled = True
@@ -334,7 +327,14 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         self.progress_ring.setValue(0)
         self.load_more_ring.setValue(0)
 
-    def reset_to_idle(self):
+    def on_page_left(self) -> None:
+        """Cancel in-flight workers and cover loaders when leaving the page.
+        _safe_reset() calls _on_safe_reset() (clears flags, stops timer),
+        _cancel_cover_loaders(), then disconnects/interrupts all workers.
+        """
+        self._safe_reset()
+
+    def reset_to_idle(self) -> None:
         """Reset page to idle state after an error."""
         self._safe_reset()
         self._hide_loading()
@@ -356,7 +356,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         self._on_load_up()
         return True
 
-    def _on_load_up(self):
+    def _on_load_up(self) -> None:
         url = self.url_input.text().strip()
         if not url:
             self._show_error("请输入UP主空间链接")
@@ -396,7 +396,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         self._track_worker(w)
         w.start()
 
-    def _on_info_done(self, info: dict):
+    def _on_info_done(self, info: dict) -> None:
         if self._load_cancelled:
             return  # was cancelled
         self._show_up_info(info)
@@ -410,7 +410,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         w.start()
         self._collect_finished_workers()
 
-    def _on_info_error(self, msg: str):
+    def _on_info_error(self, msg: str) -> None:
         self._loading = False
         if self._load_cancelled:
             return
@@ -420,7 +420,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         self.url_input.setEnabled(True)
         self._collect_finished_workers()
 
-    def _show_up_info(self, info: dict):
+    def _show_up_info(self, info: dict) -> None:
         self.up_name.setText(info.get("name", "未知"))
         self.up_sign.setText(info.get("sign", "") or "这个人很懒，什么都没写")
 
@@ -434,14 +434,15 @@ class UpPage(SmoothScrollArea, WorkerMixin):
 
         face_url = info.get("face", "")
         if face_url:
-            loader = CoverLoader(face_url, "avatar")
-            loader.url_loaded.connect(self._on_avatar_loaded)
-            loader.start()
+            signals = CoverSignals()
+            signals.url_loaded.connect(self._on_avatar_loaded)
+            loader = CoverLoader(face_url, "avatar", signals)
+            QThreadPool.globalInstance().start(loader)
             self._cover_loaders.append(loader)
 
         self.info_card.setVisible(True)
 
-    def _on_avatar_loaded(self, key: str, data: bytes):
+    def _on_avatar_loaded(self, key: str, data: bytes) -> None:
         pixmap = QPixmap()
         if pixmap.loadFromData(data):
             scaled = pixmap.scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -449,7 +450,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
 
     # ── Videos ──
 
-    def _on_videos_done(self, data: dict):
+    def _on_videos_done(self, data: dict) -> None:
         if self._load_cancelled:
             return
         if not self._loading:
@@ -498,7 +499,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         self.url_input.setEnabled(True)
         self._collect_finished_workers()
 
-    def _on_videos_error(self, msg: str):
+    def _on_videos_error(self, msg: str) -> None:
         if self._load_cancelled:
             return
         self._loading = False
@@ -512,7 +513,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         self.url_input.setEnabled(True)
         self._collect_finished_workers()
 
-    def _add_video_cards(self, videos: list[dict]):
+    def _add_video_cards(self, videos: list[dict]) -> None:
         """Add video cards to the grid (3 columns)."""
         col = 3
         start_idx = len(self._video_cards)
@@ -529,21 +530,22 @@ class UpPage(SmoothScrollArea, WorkerMixin):
                 # Load cover image
                 cover_url = v.get("cover", "")
                 if cover_url:
-                    loader = CoverLoader(cover_url, v.get("bvid", ""))
-                    loader.url_loaded.connect(self._on_cover_loaded)
-                    loader.start()
+                    signals = CoverSignals()
+                    signals.url_loaded.connect(self._on_cover_loaded)
+                    loader = CoverLoader(cover_url, v.get("bvid", ""), signals)
+                    QThreadPool.globalInstance().start(loader)
                     self._cover_loaders.append(loader)
         finally:
             self.setUpdatesEnabled(True)
 
-    def _on_cover_loaded(self, bvid: str, data: bytes):
+    def _on_cover_loaded(self, bvid: str, data: bytes) -> None:
         """Set cover image on the matching video card."""
         for card in self._video_cards:
             if card._bvid == bvid:
                 card.set_cover(data)
                 break
 
-    def _on_load_more(self):
+    def _on_load_more(self) -> None:
         if self._loading:
             return
         self._loading = True
@@ -560,12 +562,12 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         self._track_worker(w)
         w.start()
 
-    def _on_parse_video(self, bvid: str):
+    def _on_parse_video(self, bvid: str) -> None:
         """Emit parse signal with the full video URL."""
         url = f"https://www.bilibili.com/video/{bvid}"
         self.parse_video.emit(url)
 
-    def _clear_grid(self):
+    def _clear_grid(self) -> None:
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             if item and item.widget():
@@ -573,7 +575,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         self._video_cards.clear()
         self._cancel_cover_loaders()
 
-    def clear(self):
+    def clear(self) -> None:
         """Reset the page state."""
         self._safe_reset()
         self._current_uid = None

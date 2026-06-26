@@ -1,12 +1,10 @@
 """
 Search page - search Bilibili videos and uploaders by keyword.
 """
-from typing import Optional
-
-from PySide6.QtCore import Qt, Signal, QThread, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QThreadPool
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QFrame, QWidget, QGridLayout, QLabel,
+    QVBoxLayout, QHBoxLayout, QFrame, QWidget, QGridLayout,
     QStackedWidget,
 )
 
@@ -15,13 +13,13 @@ from qfluentwidgets import (
     CardWidget, CaptionLabel, BodyLabel, StrongBodyLabel,
     InfoBar, InfoBarPosition, FluentIcon as FIF,
     ImageLabel, TitleLabel, HorizontalSeparator, ProgressRing,
-    Pivot, SegmentedWidget, SmoothScrollArea,
+    SegmentedWidget, SmoothScrollArea,
 )
 
-from app.utils.cover_loader import CoverLoader
+from app.utils.cover_loader import CoverLoader, CoverSignals
 from app.utils.async_worker import AsyncWorker
 from app.utils.worker_mixin import WorkerMixin
-from app.utils.helpers import format_duration, muted_text_color, secondary_text_color, normal_text_color, configure_smooth_scroll
+from app.utils.helpers import format_count, format_duration, muted_text_color, secondary_text_color, normal_text_color, configure_smooth_scroll
 from app.platforms.bilibili import BilibiliPlatform
 
 
@@ -52,12 +50,6 @@ class SearchUploadersWorker(AsyncWorker):
 
     async def work(self):
         return await self.platform.search_uploaders(self.keyword, self.page, self.page_size)
-
-
-def format_count(n: int) -> str:
-    if n >= 10000:
-        return f"{n/10000:.1f}万"
-    return str(n)
 
 
 class SearchVideoCard(CardWidget):
@@ -100,7 +92,7 @@ class SearchVideoCard(CardWidget):
         self.parse_btn.clicked.connect(lambda: self.parse_clicked.emit(self._bvid))
         layout.addWidget(self.parse_btn)
 
-    def set_cover(self, data: bytes):
+    def set_cover(self, data: bytes) -> None:
         self._cover_data = data
         pixmap = QPixmap()
         if pixmap.loadFromData(data):
@@ -160,7 +152,7 @@ class SearchUploaderCard(CardWidget):
         self.view_btn.clicked.connect(lambda: self.view_clicked.emit(self._uid))
         layout.addWidget(self.view_btn)
 
-    def set_avatar(self, data: bytes):
+    def set_avatar(self, data: bytes) -> None:
         pixmap = QPixmap()
         if pixmap.loadFromData(data):
             scaled = pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -196,14 +188,14 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         WorkerMixin.__init_from__(self)
         configure_smooth_scroll(self)
 
-    def _init_platform(self):
+    def _init_platform(self) -> None:
         if self.main_window and hasattr(self.main_window, 'bilibili'):
             self._platform = self.main_window.bilibili
         else:
             from app.platforms.bilibili import BilibiliPlatform
             self._platform = BilibiliPlatform()
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         self.container = QFrame(self)
         self.container.setObjectName("searchContainer")
         self.setWidget(self.container)
@@ -327,7 +319,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self.content_stack.setCurrentIndex(0)
         self.vBoxLayout.addWidget(self.content_stack)
 
-    def _switch_mode(self, mode: str):
+    def _switch_mode(self, mode: str) -> None:
         if self._search_mode == mode:
             return
         self._search_mode = mode
@@ -338,24 +330,24 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self._uploader_cards = []
         self.content_stack.setCurrentIndex(0)
 
-    def _spin_progress(self):
+    def _spin_progress(self) -> None:
         self._progress_value = (self._progress_value + 4) % 101
         self.progress_ring.setValue(self._progress_value)
         self.load_more_ring.setValue(self._progress_value)
 
-    def _show_loading(self, text: str):
+    def _show_loading(self, text: str) -> None:
         self.status_label.hide()
         self.loading_text.setText(text)
         self.content_stack.setCurrentIndex(1)
         self._progress_value = 0
         self._progress_timer.start()
 
-    def _hide_loading(self):
+    def _hide_loading(self) -> None:
         self._progress_timer.stop()
         self.progress_ring.setValue(0)
         self.load_more_ring.setValue(0)
 
-    def _show_status(self, msg: str, is_error: bool = False):
+    def _show_status(self, msg: str, is_error: bool = False) -> None:
         self._hide_loading()
         self.status_label.setText(msg)
         self.status_label.setStyleSheet(
@@ -363,7 +355,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         )
         self.status_label.show()
 
-    def _show_error(self, msg: str):
+    def _show_error(self, msg: str) -> None:
         self._show_status(msg, is_error=True)
         window = self.window()
         if window:
@@ -374,7 +366,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
                 parent=window,
             )
 
-    def _on_safe_reset(self):
+    def _on_safe_reset(self) -> None:
         """Reset page-specific state before worker cleanup."""
         self._loading = False
         self._load_cancelled = True
@@ -382,7 +374,11 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self.progress_ring.setValue(0)
         self.load_more_ring.setValue(0)
 
-    def reset_to_idle(self):
+    def on_page_left(self) -> None:
+        """Cancel in-flight workers and cover loaders when leaving the page."""
+        self._safe_reset()
+
+    def reset_to_idle(self) -> None:
         """Reset page to idle state after an error."""
         self._safe_reset()
         self._hide_loading()
@@ -393,7 +389,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self.search_btn.setEnabled(True)
         self.search_input.setEnabled(True)
 
-    def _on_search(self):
+    def _on_search(self) -> None:
         keyword = self.search_input.text().strip()
         if not keyword:
             self._show_error("请输入搜索关键词")
@@ -428,7 +424,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self._track_worker(w)
         w.start()
 
-    def _on_results_done(self, data: dict):
+    def _on_results_done(self, data: dict) -> None:
         if self._load_cancelled:
             return
 
@@ -474,7 +470,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self.search_input.setEnabled(True)
         self._collect_finished_workers()
 
-    def _on_results_error(self, msg: str):
+    def _on_results_error(self, msg: str) -> None:
         if self._load_cancelled:
             return
         self._hide_loading()
@@ -487,7 +483,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self.search_input.setEnabled(True)
         self._collect_finished_workers()
 
-    def _add_video_cards(self, videos):
+    def _add_video_cards(self, videos) -> None:
         col = 3
         start_idx = len(self._video_cards)
         self.setUpdatesEnabled(False)
@@ -502,14 +498,15 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
 
                 cover_url = v.get("cover", "")
                 if cover_url:
-                    loader = CoverLoader(cover_url, v.get("bvid", ""))
-                    loader.url_loaded.connect(self._on_cover_loaded)
-                    loader.start()
+                    signals = CoverSignals()
+                    signals.url_loaded.connect(self._on_cover_loaded)
+                    loader = CoverLoader(cover_url, v.get("bvid", ""), signals)
+                    QThreadPool.globalInstance().start(loader)
                     self._cover_loaders.append(loader)
         finally:
             self.setUpdatesEnabled(True)
 
-    def _add_uploader_cards(self, uploaders):
+    def _add_uploader_cards(self, uploaders) -> None:
         col = 2
         start_idx = len(self._uploader_cards)
         self.setUpdatesEnabled(False)
@@ -525,26 +522,27 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
                 face_url = u.get("face", "")
                 uid = u.get("uid", 0)
                 if face_url:
-                    loader = CoverLoader(face_url, str(uid))
-                    loader.url_loaded.connect(self._on_avatar_loaded)
-                    loader.start()
+                    signals = CoverSignals()
+                    signals.url_loaded.connect(self._on_avatar_loaded)
+                    loader = CoverLoader(face_url, str(uid), signals)
+                    QThreadPool.globalInstance().start(loader)
                     self._cover_loaders.append(loader)
         finally:
             self.setUpdatesEnabled(True)
 
-    def _on_cover_loaded(self, bvid: str, data: bytes):
+    def _on_cover_loaded(self, bvid: str, data: bytes) -> None:
         for card in self._video_cards:
             if card._bvid == bvid:
                 card.set_cover(data)
                 break
 
-    def _on_avatar_loaded(self, key: str, data: bytes):
+    def _on_avatar_loaded(self, key: str, data: bytes) -> None:
         for card in self._uploader_cards:
             if str(card._uid) == key:
                 card.set_avatar(data)
                 break
 
-    def _on_load_more(self):
+    def _on_load_more(self) -> None:
         if self._loading:
             return
         self._loading = True
@@ -564,15 +562,15 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self._track_worker(w)
         w.start()
 
-    def _on_parse_video(self, bvid: str):
+    def _on_parse_video(self, bvid: str) -> None:
         url = f"https://www.bilibili.com/video/{bvid}"
         self.parse_video.emit(url)
 
-    def _on_view_uploader(self, uid: int):
+    def _on_view_uploader(self, uid: int) -> None:
         """Emit signal to jump to UP主 space page."""
         self.view_uploader.emit(uid)
 
-    def _clear_grid(self):
+    def _clear_grid(self) -> None:
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             if item and item.widget():
@@ -581,7 +579,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self._uploader_cards.clear()
         self._cancel_cover_loaders()
 
-    def focus_search(self):
+    def focus_search(self) -> None:
         """Focus the search input for keyboard shortcut."""
         self.search_input.setFocus()
         self.search_input.selectAll()

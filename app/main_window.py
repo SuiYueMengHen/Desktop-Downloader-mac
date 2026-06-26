@@ -1,11 +1,10 @@
 """
 Main application window with FluentWindow sidebar navigation.
 """
-import sys
 import asyncio
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
-from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QAction, QKeySequence, QShortcut, QCloseEvent
+from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtGui import QKeySequence, QShortcut, QCloseEvent
 
 from qfluentwidgets import (
     FluentWindow, NavigationItemPosition, FluentIcon as FIF,
@@ -80,27 +79,28 @@ class MainWindow(FluentWindow):
         self._batch_index: int = 0
         self._cred_worker: Optional[CredentialCheckWorker] = None
 
-        # Create pages - set unique object names for navigation routing
+        # Set window size BEFORE showing — prevents small-then-big resize
+        # which would make the splash overlay's parent.rect() incorrect
+        self.resize(1100, 750)
+        self.setMinimumSize(800, 550)
+
+        # Show window first so splash overlay positions correctly on screen
+        self.show()
+        QApplication.processEvents()
+
+        # Show splash overlay to cover initialization work
+        self.splash = None
+        if self.config.startup_animation:
+            self.splash = SplashOverlay(self)
+            self.splash.raise_()
+            self.splash.show()
+            QApplication.processEvents()
+
+        # Lazy page loading — only HomePage created eagerly (always shown first)
+        self._pages: dict[str, QWidget] = {}
         self.home_page = HomePage(self)
         self.home_page.setObjectName("homePage")
-
-        self.download_page = DownloadPage(self)
-        self.download_page.setObjectName("downloadPage")
-
-        self.settings_page = SettingsPage(self)
-        self.settings_page.setObjectName("settingsPage")
-
-        self.history_page = HistoryPage(self)
-        self.history_page.setObjectName("historyPage")
-
-        self.up_page = UpPage(self)
-        self.up_page.setObjectName("upPage")
-
-        self.collection_page = CollectionPage(self)
-        self.collection_page.setObjectName("collectionPage")
-
-        self.search_page = SearchPage(self)
-        self.search_page.setObjectName("searchPage")
+        self._pages["homePage"] = self.home_page
 
         # Init UI
         self._init_navigation()
@@ -114,13 +114,6 @@ class MainWindow(FluentWindow):
 
         # Apply theme
         self._apply_theme()
-
-        self.splash = None
-        if self.config.startup_animation:
-            self.splash = SplashOverlay(self)
-            self.splash.raise_()
-            self.splash.show()
-            QApplication.processEvents()
 
         # Listen for system theme changes (when in AUTO mode)
         self.themeListener = SystemThemeListener(self)
@@ -137,35 +130,78 @@ class MainWindow(FluentWindow):
         self._cred_refresh_timer.timeout.connect(self._refresh_bilibili_credential)
         self._cred_refresh_timer.start()
 
-        # Initial credential check after 5 seconds (let UI settle)
-        QTimer.singleShot(5000, self._refresh_bilibili_credential)
+        # Initial credential check after splash is done and UI settles
+        QTimer.singleShot(
+            3000 if self.splash else 5000,
+            self._refresh_bilibili_credential,
+        )
 
         # Dismiss splash after a brief delay so the user can see the animation
         if self.splash:
             QTimer.singleShot(1000, self._dismiss_splash)
 
-    def _dismiss_splash(self):
+    def _dismiss_splash(self) -> None:
         self.splash.set_status("加载完成")
         self.splash.dismiss()
         self.splash = None
 
-    def _init_navigation(self):
+    @property
+    def download_page(self) -> DownloadPage:
+        return self._get_page("downloadPage")
+
+    @property
+    def settings_page(self) -> SettingsPage:
+        return self._get_page("settingsPage")
+
+    @property
+    def history_page(self) -> HistoryPage:
+        return self._get_page("historyPage")
+
+    @property
+    def up_page(self) -> UpPage:
+        return self._get_page("upPage")
+
+    @property
+    def collection_page(self) -> CollectionPage:
+        return self._get_page("collectionPage")
+
+    @property
+    def search_page(self) -> SearchPage:
+        return self._get_page("searchPage")
+
+    def _get_page(self, name: str) -> QWidget:
+        """Get or create a lazily-initialized page."""
+        if name not in self._pages:
+            cls = {
+                "downloadPage": DownloadPage,
+                "settingsPage": SettingsPage,
+                "historyPage": HistoryPage,
+                "upPage": UpPage,
+                "collectionPage": CollectionPage,
+                "searchPage": SearchPage,
+            }[name]
+            page = cls(self)
+            page.setObjectName(name)
+            self._pages[name] = page
+        return self._pages[name]
+
+    def _init_navigation(self) -> None:
         """Set up sidebar navigation items."""
         self.addSubInterface(self.home_page, FIF.DOWNLOAD, "下载")
-        self.addSubInterface(self.download_page, FIF.PLAY, "下载列表")
-        self.addSubInterface(self.history_page, FIF.HISTORY, "下载历史")
-        self.addSubInterface(self.up_page, FIF.PEOPLE, "UP主空间")
-        self.addSubInterface(self.collection_page, FIF.ALBUM, "UP主合集")
-        self.addSubInterface(self.search_page, FIF.SEARCH, "搜索")
+        self.addSubInterface(self._get_page("downloadPage"), FIF.PLAY, "下载列表")
+        self.addSubInterface(self._get_page("historyPage"), FIF.HISTORY, "下载历史")
+        self.addSubInterface(self._get_page("upPage"), FIF.PEOPLE, "UP主空间")
+        self.addSubInterface(self._get_page("collectionPage"), FIF.ALBUM, "UP主合集")
+        self.addSubInterface(self._get_page("searchPage"), FIF.SEARCH, "搜索")
 
         self.navigationInterface.addSeparator()
 
         self.addSubInterface(
-            self.settings_page, FIF.SETTING, "设置",
+            self._get_page("settingsPage"), FIF.SETTING, "设置",
             position=NavigationItemPosition.BOTTOM,
         )
 
-    def _on_theme_toggle(self):
+    def _on_theme_toggle(self) -> None:
         """Toggle theme from navigation button."""
         toggleTheme()
         new_mode = "dark" if isDarkTheme() else "light"
@@ -175,7 +211,7 @@ class MainWindow(FluentWindow):
             theme_map_rev = {"dark": "深色", "light": "浅色"}
             self.settings_page.theme_combo.setCurrentText(theme_map_rev.get(new_mode, "自动"))
 
-    def _init_window(self):
+    def _init_window(self) -> None:
         """Configure window properties."""
         self.resize(1100, 750)
         self.setMinimumSize(800, 550)
@@ -183,10 +219,10 @@ class MainWindow(FluentWindow):
         self._update_window_icon()
         qconfig.themeChanged.connect(self._update_window_icon)
 
-    def _update_window_icon(self):
+    def _update_window_icon(self) -> None:
         self.setWindowIcon(FIF.DOWNLOAD.icon())
 
-    def _init_shortcuts(self):
+    def _init_shortcuts(self) -> None:
         """Register global keyboard shortcuts."""
         # Ctrl+L / Ctrl+Shift+V — Focus URL input on home page
         QShortcut(QKeySequence("Ctrl+L"), self).activated.connect(
@@ -231,30 +267,30 @@ class MainWindow(FluentWindow):
             self._on_escape
         )
 
-    def _focus_url_input(self):
+    def _focus_url_input(self) -> None:
         """Switch to home page and focus the URL input."""
         self.switchTo(self.home_page)
         self.home_page.url_input.setFocus()
         self.home_page.url_input.selectAll()
 
-    def _trigger_url_parse(self):
+    def _trigger_url_parse(self) -> None:
         """If on home page, trigger URL parsing."""
         if self.stackedWidget.currentWidget() == self.home_page:
             self.home_page._on_parse_url()
 
-    def _on_escape(self):
+    def _on_escape(self) -> None:
         """Handle Escape key — cancel batch mode or go home."""
         if self.home_page._in_batch_mode:
             self.home_page._exit_batch_mode()
         elif self.stackedWidget.currentWidget() != self.home_page:
             self.switchTo(self.home_page)
 
-    def _focus_search(self):
+    def _focus_search(self) -> None:
         """Switch to search page and focus the search input."""
         self.switchTo(self.search_page)
         self.search_page.focus_search()
 
-    def _connect_signals(self):
+    def _connect_signals(self) -> None:
         """Connect internal signals."""
         # Update download manager max concurrent when settings change
         if hasattr(self.settings_page, 'concurrent_changed'):
@@ -282,7 +318,7 @@ class MainWindow(FluentWindow):
         self.download_manager.task_added.connect(self.download_page.on_task_added)
 
         # Refresh history page when download completes
-        self.download_manager.on_completed(lambda p: self.history_page.refresh())
+        self.download_manager.on_completed(lambda p: self.history_page.append_entry())
 
         # Notification service for download events
         self.download_manager.on_completed(
@@ -321,18 +357,18 @@ class MainWindow(FluentWindow):
         # Collection page -> batch parse
         self.collection_page.parse_batch_requested.connect(self._on_collection_parse_batch)
 
-        self.home_page.resolve_complete.connect(self._on_batch_resolve_complete)
         self.home_page.parse_complete.connect(self._on_batch_parse_complete)
         self.home_page.batch_cancelled.connect(self._cancel_batch)
 
-    def _apply_theme(self):
+    def _apply_theme(self) -> None:
         """Apply saved theme mode."""
         mode = self.config.theme_mode
         if mode == "dark":
             setTheme(Theme.DARK)
         elif mode == "light":
             setTheme(Theme.LIGHT)
-        # "auto" = default (system)
+        if self.splash:
+            self.splash.refresh_theme()
 
     def _on_download_requested(self, task):
         """Handle a new download request from home page."""
@@ -351,7 +387,7 @@ class MainWindow(FluentWindow):
             self.switchTo(self.download_page)
         return task_id
 
-    def _on_clipboard_url(self, url: str):
+    def _on_clipboard_url(self, url: str) -> None:
         """Handle a URL detected from clipboard monitor."""
         self.request_parse(url, source="clipboard")
 
@@ -422,18 +458,18 @@ class MainWindow(FluentWindow):
                     parent=self,
                 )
 
-    def _on_up_parse_video(self, url: str):
+    def _on_up_parse_video(self, url: str) -> None:
         """Handle parse request from UP主 space or search page."""
         self.request_parse(url, source="up_or_search")
 
-    def _on_view_uploader(self, uid: int):
+    def _on_view_uploader(self, uid: int) -> None:
         """Jump to UP主 space page from search results."""
         url = f"https://space.bilibili.com/{uid}"
         self.switchTo(self.up_page)
         self.up_page.url_input.setText(url)
         self.up_page._on_load_up()
 
-    def _on_batch_urls(self, urls: list[str]):
+    def _on_batch_urls(self, urls: list[str]) -> None:
         """Handle batch import from the batch import dialog."""
         # Guard: exit existing batch mode first
         if self.home_page._in_batch_mode:
@@ -442,7 +478,7 @@ class MainWindow(FluentWindow):
         self._batch_index = 0
         QTimer.singleShot(200, self._submit_next_batch_url)
 
-    def _on_collection_parse_batch(self, urls: list[str]):
+    def _on_collection_parse_batch(self, urls: list[str]) -> None:
         """Handle batch parse request from collection page."""
         # Guard: exit existing batch mode first
         if self.home_page._in_batch_mode:
@@ -453,7 +489,7 @@ class MainWindow(FluentWindow):
         self.switchTo(self.home_page)
         self._submit_next_batch_url()
 
-    def _submit_next_batch_url(self):
+    def _submit_next_batch_url(self) -> None:
         if self._batch_index >= len(self._batch_urls):
             self._batch_urls = []
             self._batch_index = 0
@@ -473,15 +509,15 @@ class MainWindow(FluentWindow):
 
         self.home_page._on_parse_url_batch(url)
 
-    def _on_batch_parse_complete(self):
+    def _on_batch_parse_complete(self) -> None:
         if self._batch_urls:
             QTimer.singleShot(1500, self._submit_next_batch_url)
 
-    def _cancel_batch(self):
+    def _cancel_batch(self) -> None:
         self._batch_urls = []
         self._batch_index = 0
 
-    def _refresh_bilibili_credential(self):
+    def _refresh_bilibili_credential(self) -> None:
         was_logged_in = self.bilibili._check_login()
         self.bilibili.refresh_credential()
         for page in (self.up_page, self.collection_page, self.search_page):
@@ -507,7 +543,7 @@ class MainWindow(FluentWindow):
         self._cred_worker.finished.connect(self._on_cred_worker_finished)
         self._cred_worker.start()
 
-    def _on_credential_result(self, is_valid: bool, was_logged_in: bool):
+    def _on_credential_result(self, is_valid: bool, was_logged_in: bool) -> None:
         if not is_valid and was_logged_in:
             InfoBar.warning(
                 title="B站登录已失效",
@@ -517,19 +553,19 @@ class MainWindow(FluentWindow):
                 parent=self,
             )
 
-    def _on_cred_worker_finished(self):
+    def _on_cred_worker_finished(self) -> None:
         self._cred_worker = None
 
-    def _on_batch_resolve_complete(self):
-        pass  # kept for compatibility
-
-    def switchTo(self, widget):
+    def switchTo(self, widget) -> None:
         """Switch to a specific page with lifecycle management.
 
         Calls on_page_left() on the current page before switching to
         cancel in-flight workers and free resources. The target page's
         results remain visible when the user navigates back.
         """
+        # If widget is a route key string, resolve to the actual page instance
+        if isinstance(widget, str):
+            widget = self._get_page(widget)
         current = self.stackedWidget.currentWidget()
         if current is not widget and hasattr(current, 'on_page_left'):
             try:
@@ -543,7 +579,7 @@ class MainWindow(FluentWindow):
         if route_key and hasattr(nav, 'setCurrentItem'):
             nav.setCurrentItem(route_key)
 
-    def _toggle_visibility(self):
+    def _toggle_visibility(self) -> None:
         """Toggle window visibility (show/hide from tray)."""
         if self.isVisible():
             self.hide()
@@ -552,12 +588,12 @@ class MainWindow(FluentWindow):
             self.raise_()
             self.activateWindow()
 
-    def _quit_app(self):
+    def _quit_app(self) -> None:
         """Force quit the application from tray menu."""
         self.config.flush()
         QApplication.quit()
 
-    def _on_tray_toggled(self, enabled: bool):
+    def _on_tray_toggled(self, enabled: bool) -> None:
         """Handle tray enable/disable toggle from settings."""
         self.config.minimize_to_tray = enabled
 
@@ -574,7 +610,7 @@ class MainWindow(FluentWindow):
         self._do_cleanup()
         super().closeEvent(event)
 
-    def _do_cleanup(self):
+    def _do_cleanup(self) -> None:
         self._cred_refresh_timer.stop()
         if self._cred_worker and self._cred_worker.isRunning():
             self._cred_worker.requestInterruption()

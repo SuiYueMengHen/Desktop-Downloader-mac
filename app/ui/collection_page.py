@@ -3,7 +3,7 @@ Collection/series page - browse and download videos from a Bilibili collection.
 """
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal, QThread, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QThreadPool
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFrame, QWidget,
@@ -18,10 +18,10 @@ from qfluentwidgets import (
     SmoothScrollArea,
 )
 
-from app.utils.cover_loader import CoverLoader
+from app.utils.cover_loader import CoverLoader, CoverSignals
 from app.utils.async_worker import AsyncWorker
 from app.utils.worker_mixin import WorkerMixin
-from app.utils.helpers import format_duration, muted_text_color, secondary_text_color, normal_text_color, configure_smooth_scroll
+from app.utils.helpers import format_count, format_duration, muted_text_color, secondary_text_color, normal_text_color, configure_smooth_scroll
 from app.platforms.bilibili import BilibiliPlatform, extract_series_id
 
 
@@ -49,12 +49,6 @@ class SeriesVideosWorker(AsyncWorker):
         return await self.platform.get_series_videos(
             self.series_id, self.page, self.page_size
         )
-
-
-def format_count(n: int) -> str:
-    if n >= 10000:
-        return f"{n / 10000:.1f}万"
-    return str(n)
 
 
 class VideoCheckCard(CardWidget):
@@ -105,10 +99,10 @@ class VideoCheckCard(CardWidget):
     def is_checked(self) -> bool:
         return self.checkbox.isChecked()
 
-    def set_checked(self, checked: bool):
+    def set_checked(self, checked: bool) -> None:
         self.checkbox.setChecked(checked)
 
-    def set_cover(self, data: bytes):
+    def set_cover(self, data: bytes) -> None:
         self._cover_data = data
         pixmap = QPixmap()
         if pixmap.loadFromData(data):
@@ -144,14 +138,14 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         WorkerMixin.__init_from__(self)
         configure_smooth_scroll(self)
 
-    def _init_platform(self):
+    def _init_platform(self) -> None:
         if self.main_window and hasattr(self.main_window, 'bilibili'):
             self._platform = self.main_window.bilibili
         else:
             from app.platforms.bilibili import BilibiliPlatform
             self._platform = BilibiliPlatform()
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         self.container = QFrame(self)
         self.container.setObjectName("collectionContainer")
         self.setWidget(self.container)
@@ -316,24 +310,24 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self.vBoxLayout.addWidget(self.content_stack, 1)
         self.vBoxLayout.addStretch()
 
-    def _spin_progress(self):
+    def _spin_progress(self) -> None:
         self._progress_value = (self._progress_value + 4) % 101
         self.progress_ring.setValue(self._progress_value)
         self.load_more_ring.setValue(self._progress_value)
 
-    def _show_loading(self, text: str):
+    def _show_loading(self, text: str) -> None:
         self.status_label.hide()
         self.loading_text.setText(text)
         self.content_stack.setCurrentIndex(1)
         self._progress_value = 0
         self._progress_timer.start()
 
-    def _hide_loading(self):
+    def _hide_loading(self) -> None:
         self._progress_timer.stop()
         self.progress_ring.setValue(0)
         self.load_more_ring.setValue(0)
 
-    def _show_status(self, msg: str, is_error: bool = False):
+    def _show_status(self, msg: str, is_error: bool = False) -> None:
         self._hide_loading()
         self.status_label.setText(msg)
         self.status_label.setStyleSheet(
@@ -341,7 +335,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         )
         self.status_label.show()
 
-    def _show_error(self, msg: str):
+    def _show_error(self, msg: str) -> None:
         self._show_status(msg, is_error=True)
         if self.window():
             InfoBar.error(
@@ -351,7 +345,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
                 parent=self.window(),
             )
 
-    def _on_safe_reset(self):
+    def _on_safe_reset(self) -> None:
         """Reset page-specific state before worker cleanup."""
         self._loading = False
         self._load_cancelled = True
@@ -359,7 +353,11 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self.progress_ring.setValue(0)
         self.load_more_ring.setValue(0)
 
-    def reset_to_idle(self):
+    def on_page_left(self) -> None:
+        """Cancel in-flight workers and cover loaders when leaving the page."""
+        self._safe_reset()
+
+    def reset_to_idle(self) -> None:
         """Reset page to idle state after an error."""
         self._safe_reset()
         self._hide_loading()
@@ -379,7 +377,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self._on_load_collection()
         return True
 
-    def _on_load_collection(self):
+    def _on_load_collection(self) -> None:
         url = self.url_input.text().strip()
         if not url:
             self._show_error("请输入合集链接")
@@ -417,7 +415,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self._track_worker(w)
         w.start()
 
-    def _on_info_done(self, info: dict):
+    def _on_info_done(self, info: dict) -> None:
         if self._load_cancelled:
             return
         self._series_info = info
@@ -431,7 +429,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self._track_worker(w)
         w.start()
 
-    def _on_info_error(self, msg: str):
+    def _on_info_error(self, msg: str) -> None:
         self._loading = False
         if self._load_cancelled:
             return
@@ -441,7 +439,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self.url_input.setEnabled(True)
         self._collect_finished_workers()
 
-    def _show_collection_info(self, info: dict):
+    def _show_collection_info(self, info: dict) -> None:
         self.collection_name.setText(info.get("name", "未命名合集"))
 
         upper = info.get("upper_name", "")
@@ -458,20 +456,21 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
 
         cover_url = info.get("cover", "")
         if cover_url:
-            loader = CoverLoader(cover_url, "cover")
-            loader.url_loaded.connect(self._on_cover_loaded)
-            loader.start()
+            signals = CoverSignals()
+            signals.url_loaded.connect(self._on_cover_loaded)
+            loader = CoverLoader(cover_url, "cover", signals)
+            QThreadPool.globalInstance().start(loader)
             self._cover_loaders.append(loader)
 
         self.info_card.setVisible(True)
 
-    def _on_cover_loaded(self, key: str, data: bytes):
+    def _on_cover_loaded(self, key: str, data: bytes) -> None:
         pixmap = QPixmap()
         if pixmap.loadFromData(data):
             scaled = pixmap.scaled(160, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.cover_label.setPixmap(scaled)
 
-    def _on_videos_done(self, data: dict):
+    def _on_videos_done(self, data: dict) -> None:
         if self._load_cancelled:
             return
         self._loading = False
@@ -524,7 +523,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self.url_input.setEnabled(True)
         self._collect_finished_workers()
 
-    def _on_videos_error(self, msg: str):
+    def _on_videos_error(self, msg: str) -> None:
         if self._load_cancelled:
             return
         self._loading = False
@@ -538,7 +537,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self.url_input.setEnabled(True)
         self._collect_finished_workers()
 
-    def _add_video_cards(self, videos: list[dict]):
+    def _add_video_cards(self, videos: list[dict]) -> None:
         self.setUpdatesEnabled(False)
         try:
             for v in videos:
@@ -549,20 +548,21 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
 
                 cover_url = v.get("cover", "")
                 if cover_url:
-                    loader = CoverLoader(cover_url, v.get("bvid", ""))
-                    loader.url_loaded.connect(self._on_card_cover_loaded)
-                    loader.start()
+                    signals = CoverSignals()
+                    signals.url_loaded.connect(self._on_card_cover_loaded)
+                    loader = CoverLoader(cover_url, v.get("bvid", ""), signals)
+                    QThreadPool.globalInstance().start(loader)
                     self._cover_loaders.append(loader)
         finally:
             self.setUpdatesEnabled(True)
 
-    def _on_card_cover_loaded(self, bvid: str, data: bytes):
+    def _on_card_cover_loaded(self, bvid: str, data: bytes) -> None:
         for card in self._video_cards:
             if card._bvid == bvid:
                 card.set_cover(data)
                 break
 
-    def _on_load_more(self):
+    def _on_load_more(self) -> None:
         if self._loading:
             return
         self._loading = True
@@ -578,13 +578,13 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self._track_worker(w)
         w.start()
 
-    def _on_select_all_changed(self):
+    def _on_select_all_changed(self, state: int = 0) -> None:
         checked = self.select_all_cb.isChecked()
         for card in self._video_cards:
             card.set_checked(checked)
         self._update_download_btn_text()
 
-    def _update_download_btn_text(self):
+    def _update_download_btn_text(self) -> None:
         selected = sum(1 for c in self._video_cards if c.is_checked())
         if selected > 0:
             self.download_btn.setText(f"下载选中（{selected} 个视频）")
@@ -592,7 +592,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
             self.download_btn.setText("请选择要下载的视频")
         self.download_btn.setEnabled(selected > 0)
 
-    def _on_download_selected(self):
+    def _on_download_selected(self) -> None:
         selected = [c for c in self._video_cards if c.is_checked()]
         if not selected:
             return
@@ -603,7 +603,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         ]
         self.parse_batch_requested.emit(urls)
 
-    def _clear_cards(self):
+    def _clear_cards(self) -> None:
         while self.cards_layout.count():
             item = self.cards_layout.takeAt(0)
             if item and item.widget():
@@ -611,7 +611,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self._video_cards.clear()
         self._cancel_cover_loaders()
 
-    def clear(self):
+    def clear(self) -> None:
         self._safe_reset()
         self._series_id = None
         self._series_info = None

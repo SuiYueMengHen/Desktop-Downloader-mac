@@ -2,11 +2,7 @@
 Download history page - browse, search, delete history, open download folder.
 """
 import os
-import subprocess
-import platform as _platform
 from datetime import datetime
-from typing import Optional
-
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFrame,
@@ -20,7 +16,7 @@ from qfluentwidgets import (
 )
 
 from app.history_manager import HistoryManager
-from app.utils.helpers import format_size, format_duration, muted_text_color, secondary_text_color, configure_smooth_scroll
+from app.utils.helpers import format_size, format_duration, muted_text_color, secondary_text_color, configure_smooth_scroll, open_download_folder
 
 
 class HistoryCard(CardWidget):
@@ -50,7 +46,7 @@ class HistoryCard(CardWidget):
         if page_label:
             badge = CaptionLabel(page_label)
             badge.setStyleSheet(
-                "background-color: #6c5ce7; color: white; "
+                "background-color: transparent; color: inherit; "
                 "padding: 2px 8px; border-radius: 10px; font-size: 11px;"
             )
             title_layout.addWidget(badge, 0, Qt.AlignTop)
@@ -122,7 +118,7 @@ class HistoryPage(SmoothScrollArea):
         configure_smooth_scroll(self)
         self._load_history()
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         self.container = QFrame(self)
         self.container.setObjectName("historyContainer")
         self.setWidget(self.container)
@@ -176,7 +172,7 @@ class HistoryPage(SmoothScrollArea):
 
         self.vBoxLayout.addStretch()
 
-    def refresh(self):
+    def refresh(self) -> None:
         """Reload history from disk and refresh the UI with debouncing.
         
         Multiple rapid calls (e.g., from batch downloads) are coalesced
@@ -185,13 +181,13 @@ class HistoryPage(SmoothScrollArea):
         self._pending_refresh = True
         self._refresh_timer.start()
 
-    def _do_refresh(self):
+    def _do_refresh(self) -> None:
         """Actually reload history from disk and refresh the UI."""
         self._pending_refresh = False
         self._history_manager.load()
         self._load_history()
 
-    def _load_history(self):
+    def _load_history(self) -> None:
         """Load and display history entries."""
         # Clear existing cards: takeAt removes from layout, then deleteLater
         while self.cards_layout.count():
@@ -242,7 +238,7 @@ class HistoryPage(SmoothScrollArea):
 
                 count_badge = CaptionLabel(f"{len(group)} 集")
                 count_badge.setStyleSheet(
-                    "background-color: #6c5ce7; color: white; "
+                    "background-color: transparent; color: inherit; "
                     "padding: 2px 10px; border-radius: 10px; font-size: 11px;"
                 )
 
@@ -297,7 +293,7 @@ class HistoryPage(SmoothScrollArea):
                     fp = e.get("file_path", "")
                     if fp and os.path.exists(fp):
                         open_btn.clicked.connect(
-                            lambda checked=False, path=fp: self._open_file_folder(path)
+                            lambda checked=False, path=fp: open_download_folder(path)
                         )
                     else:
                         open_btn.setEnabled(False)
@@ -320,30 +316,57 @@ class HistoryPage(SmoothScrollArea):
 
             # Show single entries
             for e in single:
-                card = HistoryCard(e)
-                card.open_folder_clicked.connect(self._on_open_folder)
-                card.delete_clicked.connect(self._delete_entry)
+                card = self._create_history_card(e)
                 self.cards_layout.addWidget(card)
         finally:
             self.setUpdatesEnabled(True)
 
-    def _on_search(self):
+    def _create_history_card(self, entry: dict) -> HistoryCard:
+        """Create a HistoryCard widget from a history entry dict.
+
+        Connects signal handlers for open-folder and delete actions.
+        """
+        card = HistoryCard(entry)
+        card.open_folder_clicked.connect(self._on_open_folder)
+        card.delete_clicked.connect(self._delete_entry)
+        return card
+
+    def append_entry(self) -> None:
+        """Append a single history entry card (incremental update).
+
+        Called when a download completes. Instead of a full rebuild,
+        loads the latest entry from disk and inserts one card at the top.
+        Falls back to full refresh if no cards are currently displayed.
+        """
+        if not self.cards_layout or self.cards_layout.count() == 0:
+            self._do_refresh()
+            return
+        self._history_manager.load()
+        entries = self._history_manager.get_all()
+        if not entries:
+            return
+        entry = entries[0]
+        card = self._create_history_card(entry)
+        self.cards_layout.insertWidget(0, card)
+        self.empty_label.hide()
+
+    def _on_search(self) -> None:
         query = self.search_input.text().strip()
         self._current_query = query
         self._load_history()
 
-    def _on_search_text_changed(self, text: str):
+    def _on_search_text_changed(self, text: str) -> None:
         if not text:
             self._current_query = ""
             self._load_history()
 
-    def _on_open_folder(self, task_id: str):
+    def _on_open_folder(self, task_id: str) -> None:
         entries = self._history_manager.get_all()
         for e in entries:
             if e.get("task_id") == task_id:
                 fp = e.get("file_path", "")
                 if fp:
-                    self._open_file_folder(fp)
+                    open_download_folder(fp)
                     return
         InfoBar.warning(
             title="未找到文件", content="该历史记录的文件路径不存在",
@@ -352,32 +375,11 @@ class HistoryPage(SmoothScrollArea):
             parent=self.window(),
         )
 
-    def _open_file_folder(self, file_path: str):
-        folder = os.path.dirname(file_path)
-        if os.path.exists(file_path):
-            target = os.path.dirname(file_path)
-            if _platform.system() == "Darwin":
-                subprocess.run(["open", target], check=False)
-            else:
-                os.startfile(target)
-        elif os.path.exists(folder):
-            if _platform.system() == "Darwin":
-                subprocess.run(["open", folder], check=False)
-            else:
-                os.startfile(folder)
-        else:
-            InfoBar.warning(
-                title="文件夹不存在", content=f"已无法找到: {folder}",
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=3000,
-                parent=self.window(),
-            )
-
-    def _delete_entry(self, task_id: str):
+    def _delete_entry(self, task_id: str) -> None:
         self._history_manager.delete(task_id)
         self._load_history()
 
-    def _on_clear_all(self):
+    def _on_clear_all(self) -> None:
         from qfluentwidgets import MessageBox
         msg = MessageBox("清空历史", "确定要清空所有下载历史记录吗？\n此操作不可撤销。", self.window())
         msg.yesButton.setText("确定")

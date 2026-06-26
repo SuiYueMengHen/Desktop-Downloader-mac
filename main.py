@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Desktop Downloader - Multi-platform video downloader with Fluent Design UI.
-Supports Bilibili, Douyin, TikTok and more.
+Supports Bilibili video downloading.
 
 Usage:
     python main.py

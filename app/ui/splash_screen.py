@@ -39,10 +39,13 @@ class SplashOverlay(QWidget):
         layout.setAlignment(Qt.AlignCenter)
         layout.setSpacing(12)
 
-        icon_label = StrongBodyLabel("")
-        icon_label.setPixmap(FIF.DOWNLOAD.icon().pixmap(64, 64))
-        icon_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(icon_label)
+        self._icon_label = StrongBodyLabel("")
+        self._version_label = CaptionLabel(f"v{__version__}")
+        self._status_label = CaptionLabel("正在启动...")
+
+        self._update_theme()
+        self._icon_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._icon_label)
 
         title_label = StrongBodyLabel("Desktop Downloader")
         title_label.setAlignment(Qt.AlignCenter)
@@ -52,10 +55,8 @@ class SplashOverlay(QWidget):
         title_label.setFont(title_font)
         layout.addWidget(title_label)
 
-        version_label = CaptionLabel(f"v{__version__}")
-        version_label.setAlignment(Qt.AlignCenter)
-        version_label.setStyleSheet(f"color: {muted_text_color()}; font-size: 13px;")
-        layout.addWidget(version_label)
+        self._version_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._version_label)
 
         layout.addSpacing(8)
 
@@ -64,10 +65,8 @@ class SplashOverlay(QWidget):
         self.progress_ring.setStrokeWidth(4)
         layout.addWidget(self.progress_ring, 0, Qt.AlignCenter)
 
-        self.status_label = CaptionLabel("正在启动...")
-        self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setStyleSheet(f"color: {muted_text_color()}; font-size: 13px;")
-        layout.addWidget(self.status_label)
+        self._status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._status_label)
 
     def _start_progress_animation(self):
         self._progress_value = 0
@@ -81,7 +80,7 @@ class SplashOverlay(QWidget):
         self.progress_ring.setValue(self._progress_value)
 
     def set_status(self, text: str):
-        self.status_label.setText(text)
+        self._status_label.setText(text)
 
     def dismiss(self, callback=None):
         self._progress_timer.stop()
@@ -95,6 +94,17 @@ class SplashOverlay(QWidget):
         self._fade_anim.setEasingCurve(QEasingCurve.OutCubic)
         self._fade_anim.finished.connect(self.close)
         self._fade_anim.start()
+
+    def refresh_theme(self) -> None:
+        """Regenerate icon and label styles (call after theme change)."""
+        self._update_theme()
+
+    def _update_theme(self) -> None:
+        """Apply current theme colors to icon and all labels."""
+        self._icon_label.setPixmap(FIF.DOWNLOAD.icon().pixmap(64, 64))
+        mc = muted_text_color()
+        self._version_label.setStyleSheet(f"color: {mc}; font-size: 13px;")
+        self._status_label.setStyleSheet(f"color: {mc}; font-size: 13px;")
 
     def paintEvent(self, event):
         painter = QPainter(self)
