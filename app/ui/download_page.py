@@ -11,11 +11,12 @@ from qfluentwidgets import (
     CardWidget, ProgressBar, PushButton,
     PrimaryPushButton, TitleLabel, CaptionLabel, BodyLabel,
     InfoBar, InfoBarPosition, FluentIcon as FIF,
-    HorizontalSeparator, SmoothScrollArea,
+    HorizontalSeparator, SmoothScrollArea, isDarkTheme,
 )
 
 from app.download_manager import DownloadProgress
-from app.utils.helpers import format_size, format_speed, muted_text_color, secondary_text_color, configure_smooth_scroll, open_download_folder
+from app.utils.helpers import format_size, format_speed, configure_smooth_scroll, open_download_folder
+from app.theme import apply_style
 
 
 class DownloadItemCard(CardWidget):
@@ -45,7 +46,7 @@ class DownloadItemCard(CardWidget):
         self.title_label.setFont(_font)
 
         self.status_label = BodyLabel("等待中")
-        self.status_label.setStyleSheet(f"font-size: 12px; color: {secondary_text_color()};")
+        apply_style(self.status_label, "font-size: 12px;", "secondary")
 
         header_layout.addWidget(self.title_label, 1)
         header_layout.addWidget(self.status_label)
@@ -55,7 +56,7 @@ class DownloadItemCard(CardWidget):
         # Platform label
         if platform:
             platform_label = CaptionLabel(platform)
-            platform_label.setStyleSheet(f"color: {secondary_text_color()}; font-size: 11px;")
+            apply_style(platform_label, "font-size: 11px;", "secondary")
             layout.addWidget(platform_label)
 
         # Progress bar
@@ -68,11 +69,11 @@ class DownloadItemCard(CardWidget):
         # Info row: size / speed / percent
         info_layout = QHBoxLayout()
         self.size_label = CaptionLabel("0 B / 0 B")
-        self.size_label.setStyleSheet(f"color: {muted_text_color()};")
+        apply_style(self.size_label, color="muted")
         self.speed_label = CaptionLabel("---")
-        self.speed_label.setStyleSheet(f"color: {muted_text_color()};")
+        apply_style(self.speed_label, color="muted")
         self.percent_label = CaptionLabel("0%")
-        self.percent_label.setStyleSheet(f"color: {muted_text_color()};")
+        apply_style(self.percent_label, color="muted")
 
         info_layout.addWidget(self.size_label)
         info_layout.addWidget(self.speed_label)
@@ -139,24 +140,27 @@ class DownloadItemCard(CardWidget):
         self.status_label.setText(status_map.get(status, status))
 
         if status == "error":
-            self.status_label.setStyleSheet("font-size: 12px; color: #e74c3c;")
-            self.progress_bar.setCustomBarColor(QColor(231, 76, 60), QColor(192, 57, 43))
+            apply_style(self.status_label, "font-size: 12px;", ("#e74c3c", "#ff6b6b"))
+            if isDarkTheme():
+                self.progress_bar.setCustomBarColor(QColor(255, 107, 107), QColor(231, 76, 60))
+            else:
+                self.progress_bar.setCustomBarColor(QColor(231, 76, 60), QColor(192, 57, 43))
             self.pause_btn.setVisible(False)
             self.retry_btn.setVisible(True)
         elif status == "completed":
-            self.status_label.setStyleSheet("font-size: 12px; color: #27ae60;")
+            apply_style(self.status_label, "font-size: 12px;", ("#27ae60", "#2ecc71"))
             self.pause_btn.setVisible(False)
             self.retry_btn.setVisible(False)
             self.open_btn.setVisible(True)
         elif status == "paused":
-            self.status_label.setStyleSheet("font-size: 12px; color: #f39c12;")
+            apply_style(self.status_label, "font-size: 12px;", ("#f39c12", "#f1c40f"))
             self.pause_btn.setText("继续")
         elif status == "downloading":
-            self.status_label.setStyleSheet("font-size: 12px; color: #3498db;")
+            apply_style(self.status_label, "font-size: 12px;", ("#3498db", "#5dade2"))
             self.pause_btn.setText("暂停")
             self.pause_btn.setVisible(True)
         elif status == "merging":
-            self.status_label.setStyleSheet("font-size: 12px; color: #9b59b6;")
+            apply_style(self.status_label, "font-size: 12px;", ("#9b59b6", "#af7ac5"))
 
 
 class DownloadPage(SmoothScrollArea):
@@ -186,9 +190,24 @@ class DownloadPage(SmoothScrollArea):
         header.setStyleSheet("font-size: 28px; font-weight: 600;")
         self.vBoxLayout.addWidget(header)
 
-        self.desc_label = CaptionLabel("暂无下载任务")
-        self.desc_label.setStyleSheet(f"font-size: 14px; color: {muted_text_color()};")
-        self.vBoxLayout.addWidget(self.desc_label)
+        # Empty state widget
+        self.empty_widget = QWidget()
+        empty_layout = QVBoxLayout(self.empty_widget)
+        empty_layout.setAlignment(Qt.AlignCenter)
+        empty_layout.setSpacing(12)
+
+        from qfluentwidgets import IconWidget
+        empty_icon = IconWidget(FIF.DOWNLOAD)
+        empty_icon.setFixedSize(48, 48)
+        empty_layout.addWidget(empty_icon, 0, Qt.AlignCenter)
+
+        empty_title = TitleLabel("暂无下载任务")
+        empty_title.setAlignment(Qt.AlignCenter)
+        empty_title.setStyleSheet("font-size: 20px; font-weight: 600;")
+        empty_layout.addWidget(empty_title)
+
+        self.empty_widget.hide()
+        self.vBoxLayout.addWidget(self.empty_widget)
 
         # Separator
         self.vBoxLayout.addWidget(HorizontalSeparator())
@@ -223,7 +242,8 @@ class DownloadPage(SmoothScrollArea):
 
         self._cards[task_id] = card
         self.cards_layout.addWidget(card)
-        self.desc_label.hide()
+        if hasattr(self, 'empty_widget'):
+            self.empty_widget.hide()
 
     def update_progress(self, progress: DownloadProgress) -> None:
         """Update progress for a task (called from DownloadManager)."""
@@ -321,8 +341,8 @@ class DownloadPage(SmoothScrollArea):
             card = self._cards.pop(tid)
             self.cards_layout.removeWidget(card)
             card.deleteLater()
-        if not self._cards:
-            self.desc_label.show()
+        if not self._cards and hasattr(self, 'empty_widget'):
+            self.empty_widget.show()
 
     def _on_start_all(self) -> None:
         mw = self.window()
@@ -338,5 +358,5 @@ class DownloadPage(SmoothScrollArea):
             card = self._cards.pop(task_id)
             self.cards_layout.removeWidget(card)
             card.deleteLater()
-            if not self._cards:
-                self.desc_label.show()
+            if not self._cards and hasattr(self, 'empty_widget'):
+                self.empty_widget.show()

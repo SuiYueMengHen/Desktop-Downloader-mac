@@ -19,7 +19,9 @@ from qfluentwidgets import (
 from app.utils.cover_loader import CoverLoader, CoverSignals
 from app.utils.async_worker import AsyncWorker
 from app.utils.worker_mixin import WorkerMixin
-from app.utils.helpers import format_count, format_duration, muted_text_color, secondary_text_color, normal_text_color, configure_smooth_scroll
+from app.utils.helpers import format_count, format_duration, configure_smooth_scroll
+from app.theme import apply_style
+from app.utils.messages import M
 from app.platforms.bilibili import BilibiliPlatform
 
 
@@ -73,21 +75,21 @@ class SearchVideoCard(CardWidget):
         self.cover_label.setScaledContents(True)
         layout.addWidget(self.cover_label)
 
-        title = video.get("title", "无标题")
+        title = video.get("title", M.FALLBACK_TITLE)
         self.title_label = BodyLabel(title[:50])
         self.title_label.setToolTip(title)
         self.title_label.setWordWrap(True)
-        self.title_label.setStyleSheet(f"font-size: 13px; color: {normal_text_color()};")
+        apply_style(self.title_label, "font-size: 13px;", "normal")
         layout.addWidget(self.title_label)
 
         author = video.get("author", "")
         duration = video.get("duration", 0)
         play = format_count(video.get("play", 0))
-        meta = CaptionLabel(f"{author} · {play}次播放 · {format_duration(duration)}")
-        meta.setStyleSheet(f"color: {muted_text_color()}; font-size: 11px;")
+        meta = CaptionLabel(M.FORMAT_META.format(author, play, format_duration(duration)))
+        apply_style(meta, "font-size: 11px;", "muted")
         layout.addWidget(meta)
 
-        self.parse_btn = PushButton(FIF.DOWNLOAD, "解析下载")
+        self.parse_btn = PushButton(FIF.DOWNLOAD, M.BUTTON_PARSE_DOWNLOAD)
         self.parse_btn.setFixedHeight(32)
         self.parse_btn.clicked.connect(lambda: self.parse_clicked.emit(self._bvid))
         layout.addWidget(self.parse_btn)
@@ -126,28 +128,28 @@ class SearchUploaderCard(CardWidget):
         info_layout = QVBoxLayout()
         info_layout.setSpacing(4)
 
-        name = uploader.get("name", "未知")
+        name = uploader.get("name", M.FALLBACK_NAME)
         self.name_label = StrongBodyLabel(name)
-        self.name_label.setStyleSheet(f"font-size: 15px; color: {normal_text_color()};")
+        apply_style(self.name_label, "font-size: 15px;", "normal")
         info_layout.addWidget(self.name_label)
 
-        sign = uploader.get("sign", "") or "这个人很懒，什么都没写"
+        sign = uploader.get("sign", "") or M.FALLBACK_SIGN
         self.sign_label = CaptionLabel(sign[:60])
-        self.sign_label.setStyleSheet(f"color: {muted_text_color()}; font-size: 12px;")
+        apply_style(self.sign_label, "font-size: 12px;", "muted")
         info_layout.addWidget(self.sign_label)
 
         fans = format_count(uploader.get("fans", 0))
         videos = uploader.get("videos", 0)
         level = uploader.get("level", 0)
-        stats = CaptionLabel(f"粉丝 {fans} · {videos} 视频 · Lv.{level}")
-        stats.setStyleSheet(f"color: {secondary_text_color()}; font-size: 11px;")
+        stats = CaptionLabel(M.FORMAT_UPLOADER_STATS.format(fans, videos, level))
+        apply_style(stats, "font-size: 11px;", "secondary")
         info_layout.addWidget(stats)
 
         info_layout.addStretch()
         layout.addLayout(info_layout, 1)
 
         # View button
-        self.view_btn = PrimaryPushButton(FIF.PEOPLE, "查看主页")
+        self.view_btn = PrimaryPushButton(FIF.PEOPLE, M.BUTTON_VIEW_HOME)
         self.view_btn.setFixedHeight(36)
         self.view_btn.clicked.connect(lambda: self.view_clicked.emit(self._uid))
         layout.addWidget(self.view_btn)
@@ -164,6 +166,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
 
     parse_video = Signal(str)
     view_uploader = Signal(int)  # uid -> jump to up_page
+    _error_title = M.WINDOW_ERROR_TITLE
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -184,6 +187,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self._progress_timer.timeout.connect(self._spin_progress)
 
         self._setup_ui()
+        self._worker_layout = self.grid_layout
         self._load_cancelled = False
         WorkerMixin.__init_from__(self)
         configure_smooth_scroll(self)
@@ -207,24 +211,24 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self.vBoxLayout.setSpacing(16)
 
         # Header
-        header = TitleLabel("搜索")
+        header = TitleLabel(M.WINDOW_SEARCH_HEADER)
         header.setStyleSheet("font-size: 28px; font-weight: 600;")
         self.vBoxLayout.addWidget(header)
 
-        desc = CaptionLabel("搜索 Bilibili 视频或UP主，点击「解析下载」或「查看主页」")
-        desc.setStyleSheet(f"font-size: 14px; color: {muted_text_color()};")
+        desc = CaptionLabel(M.HINT_SEARCH_DESC)
+        apply_style(desc, "font-size: 14px;", "muted")
         self.vBoxLayout.addWidget(desc)
 
         # Search Input
         search_card = CardWidget(self.container)
         search_layout = QHBoxLayout(search_card)
         self.search_input = SearchLineEdit()
-        self.search_input.setPlaceholderText("输入关键词搜索B站视频或UP主...")
+        self.search_input.setPlaceholderText(M.PLACEHOLDER_SEARCH)
         self.search_input.setMinimumHeight(40)
         self.search_input.setClearButtonEnabled(True)
         self.search_input.searchSignal.connect(self._on_search)
 
-        self.search_btn = PrimaryPushButton(FIF.SEARCH, "搜索")
+        self.search_btn = PrimaryPushButton(FIF.SEARCH, M.BUTTON_SEARCH)
         self.search_btn.setMinimumHeight(40)
         self.search_btn.clicked.connect(self._on_search)
 
@@ -235,8 +239,8 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         # Mode switch (video / uploader)
         mode_layout = QHBoxLayout()
         self.mode_pivot = SegmentedWidget(self.container)
-        self.mode_pivot.addItem(routeKey="video", text="搜索视频", onClick=lambda: self._switch_mode("video"))
-        self.mode_pivot.addItem(routeKey="uploader", text="搜索UP主", onClick=lambda: self._switch_mode("uploader"))
+        self.mode_pivot.addItem(routeKey="video", text=M.BUTTON_SEARCH_VIDEO, onClick=lambda: self._switch_mode("video"))
+        self.mode_pivot.addItem(routeKey="uploader", text=M.BUTTON_SEARCH_UPLOADER, onClick=lambda: self._switch_mode("uploader"))
         self.mode_pivot.setCurrentItem("video")
         mode_layout.addWidget(self.mode_pivot)
         mode_layout.addStretch()
@@ -255,9 +259,9 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self.empty_page = QWidget()
         ep_layout = QVBoxLayout(self.empty_page)
         ep_layout.setAlignment(Qt.AlignCenter)
-        self.empty_hint = CaptionLabel("输入关键词搜索Bilibili视频或UP主")
+        self.empty_hint = CaptionLabel(M.HINT_EMPTY)
         self.empty_hint.setAlignment(Qt.AlignCenter)
-        self.empty_hint.setStyleSheet(f"color: {secondary_text_color()}; font-size: 14px;")
+        apply_style(self.empty_hint, "font-size: 14px;", "secondary")
         ep_layout.addWidget(self.empty_hint)
         self.content_stack.addWidget(self.empty_page)
 
@@ -271,9 +275,9 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self.progress_ring.setFixedSize(60, 60)
         self.progress_ring.setStrokeWidth(6)
 
-        self.loading_text = CaptionLabel("正在搜索...")
+        self.loading_text = CaptionLabel(M.LOADING_SEARCHING)
         self.loading_text.setAlignment(Qt.AlignCenter)
-        self.loading_text.setStyleSheet(f"color: {muted_text_color()}; font-size: 14px;")
+        apply_style(self.loading_text, "font-size: 14px;", "muted")
 
         lp_layout.addWidget(self.progress_ring, 0, Qt.AlignCenter)
         lp_layout.addSpacing(12)
@@ -286,8 +290,8 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         cp_layout.setContentsMargins(0, 0, 0, 0)
         cp_layout.setSpacing(16)
 
-        self.grid_label = StrongBodyLabel("搜索结果")
-        self.grid_label.setStyleSheet(f"font-size: 16px; color: {normal_text_color()};")
+        self.grid_label = StrongBodyLabel(M.HINT_RESULTS_LABEL)
+        apply_style(self.grid_label, "font-size: 16px;", "normal")
         cp_layout.addWidget(self.grid_label)
 
         self.grid_widget = QWidget()
@@ -305,7 +309,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self.load_more_ring.setStrokeWidth(3)
         self.load_more_ring.setVisible(False)
 
-        self.load_more_btn = PushButton(FIF.SYNC, "加载更多")
+        self.load_more_btn = PushButton(FIF.SYNC, M.BUTTON_LOAD_MORE)
         self.load_more_btn.setFixedHeight(40)
         self.load_more_btn.clicked.connect(self._on_load_more)
 
@@ -330,53 +334,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self._uploader_cards = []
         self.content_stack.setCurrentIndex(0)
 
-    def _spin_progress(self) -> None:
-        self._progress_value = (self._progress_value + 4) % 101
-        self.progress_ring.setValue(self._progress_value)
-        self.load_more_ring.setValue(self._progress_value)
 
-    def _show_loading(self, text: str) -> None:
-        self.status_label.hide()
-        self.loading_text.setText(text)
-        self.content_stack.setCurrentIndex(1)
-        self._progress_value = 0
-        self._progress_timer.start()
-
-    def _hide_loading(self) -> None:
-        self._progress_timer.stop()
-        self.progress_ring.setValue(0)
-        self.load_more_ring.setValue(0)
-
-    def _show_status(self, msg: str, is_error: bool = False) -> None:
-        self._hide_loading()
-        self.status_label.setText(msg)
-        self.status_label.setStyleSheet(
-            "color: #e74c3c; font-size: 13px;" if is_error else f"color: {normal_text_color()}; font-size: 13px;"
-        )
-        self.status_label.show()
-
-    def _show_error(self, msg: str) -> None:
-        self._show_status(msg, is_error=True)
-        window = self.window()
-        if window:
-            InfoBar.error(
-                title="搜索失败", content=msg,
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=5000,
-                parent=window,
-            )
-
-    def _on_safe_reset(self) -> None:
-        """Reset page-specific state before worker cleanup."""
-        self._loading = False
-        self._load_cancelled = True
-        self._progress_timer.stop()
-        self.progress_ring.setValue(0)
-        self.load_more_ring.setValue(0)
-
-    def on_page_left(self) -> None:
-        """Cancel in-flight workers and cover loaders when leaving the page."""
-        self._safe_reset()
 
     def reset_to_idle(self) -> None:
         """Reset page to idle state after an error."""
@@ -385,14 +343,14 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self.load_more_ring.setVisible(False)
         self.load_more_btn.setVisible(True)
         self.load_more_btn.setEnabled(True)
-        self.load_more_btn.setText("加载更多")
+        self.load_more_btn.setText(M.BUTTON_LOAD_MORE)
         self.search_btn.setEnabled(True)
         self.search_input.setEnabled(True)
 
     def _on_search(self) -> None:
         keyword = self.search_input.text().strip()
         if not keyword:
-            self._show_error("请输入搜索关键词")
+            self._show_error(M.ERROR_EMPTY_KEYWORD)
             return
 
         if not self._platform:
@@ -409,7 +367,7 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self._cover_loaders = []
         self._load_cancelled = False
 
-        label = "正在搜索视频..." if self._search_mode == "video" else "正在搜索UP主..."
+        label = M.LOADING_VIDEO if self._search_mode == "video" else M.LOADING_UPLOADER
         self._show_loading(label)
         self.search_btn.setEnabled(False)
         self.search_input.setEnabled(False)
@@ -457,14 +415,14 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
             self.load_more_btn.setVisible(True)
             self.load_more_btn.setEnabled(True)
             self.load_more_btn.setText(
-                f"加载更多（{len(self._results_data)}/{self._total_results}）"
+                M.FORMAT_LOAD_MORE.format(len(self._results_data), self._total_results)
             )
         else:
             self.load_more_container.setVisible(False)
 
-        label = "视频" if self._search_mode == "video" else "UP主"
+        label = M.LABEL_VIDEO if self._search_mode == "video" else M.LABEL_UPLOADER
         self._show_status(
-            f"共 {self._total_results} 个{label}，已加载 {len(self._results_data)}"
+            M.FORMAT_STATUS.format(self._total_results, label, len(self._results_data))
         )
         self.search_btn.setEnabled(True)
         self.search_input.setEnabled(True)
@@ -477,8 +435,8 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self.load_more_ring.setVisible(False)
         self.load_more_btn.setVisible(True)
         self.load_more_btn.setEnabled(True)
-        self.load_more_btn.setText("加载更多")
-        self._show_error(f"搜索失败: {msg}")
+        self.load_more_btn.setText(M.BUTTON_LOAD_MORE)
+        self._show_error(M.ERROR_SEARCH_FAILED.format(msg))
         self.search_btn.setEnabled(True)
         self.search_input.setEnabled(True)
         self._collect_finished_workers()
@@ -571,13 +529,8 @@ class SearchPage(SmoothScrollArea, WorkerMixin):
         self.view_uploader.emit(uid)
 
     def _clear_grid(self) -> None:
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-        self._video_cards.clear()
+        super()._clear_grid()
         self._uploader_cards.clear()
-        self._cancel_cover_loaders()
 
     def focus_search(self) -> None:
         """Focus the search input for keyboard shortcut."""

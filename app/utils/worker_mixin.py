@@ -13,9 +13,17 @@ Eliminates 4x identical copies of _track_worker, _collect_finished_workers,
 _cancel_cover_loaders, and the cleanup-timer setup across HomePage, UpPage,
 CollectionPage, SearchPage.
 """
+import logging
 import warnings
 
-from PySide6.QtCore import QThread, QTimer
+from PySide6.QtCore import QThread, QTimer, Qt
+from PySide6.QtWidgets import QLayout
+
+from qfluentwidgets import InfoBar, InfoBarPosition
+
+from app.utils.helpers import normal_text_color
+
+logger = logging.getLogger(__name__)
 
 
 class WorkerMixin:
@@ -41,6 +49,11 @@ class WorkerMixin:
     _zombie_workers: list[QThread]
     _cover_loaders: list
     _cleanup_timer: QTimer
+    _worker_layout: QLayout
+    _progress_timer: QTimer
+    _progress_value: int
+
+    _error_title = "请求失败"
 
     @classmethod
     def __init_from__(cls, self_obj):
@@ -88,13 +101,13 @@ class WorkerMixin:
                         try:
                             proxy_sig.disconnect()
                         except (TypeError, RuntimeError):
-                            pass
+                            logger.debug("Signal disconnect during cleanup (expected)", exc_info=True)
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", RuntimeWarning)
                     try:
                         sig.disconnect()
                     except (TypeError, RuntimeError):
-                        pass
+                        logger.debug("Signal disconnect during cleanup (expected)", exc_info=True)
 
     def _cancel_cover_loaders(self):
         """Cancel and disconnect all active CoverLoader (QRunnable) instances."""
@@ -109,7 +122,7 @@ class WorkerMixin:
                         try:
                             sig.disconnect()
                         except (TypeError, RuntimeError):
-                            pass
+                            logger.debug("CoverLoader signal disconnect (expected at shutdown)", exc_info=True)
         self._cover_loaders.clear()
 
     def _safe_reset(self):
@@ -134,9 +147,16 @@ class WorkerMixin:
             if hasattr(w, 'isRunning') and w.isRunning()
         ]
 
-    def _on_safe_reset(self):
-        """Override in subclasses to reset page-specific state before worker cleanup."""
-        pass
+    def _on_safe_reset(self) -> None:
+        """Reset page-specific state before worker cleanup."""
+        self._loading = False
+        self._load_cancelled = True
+        if hasattr(self, '_progress_timer') and self._progress_timer is not None:
+            self._progress_timer.stop()
+        if hasattr(self, 'progress_ring') and self.progress_ring is not None:
+            self.progress_ring.setValue(0)
+        if hasattr(self, 'load_more_ring') and self.load_more_ring is not None:
+            self.load_more_ring.setValue(0)
 
     def _is_running(self, obj) -> bool:
         """Check if an object is still running (QThread or QRunnable)."""
@@ -166,3 +186,47 @@ class WorkerMixin:
         a usable state. Override in subclasses to reset page-specific UI.
         """
         self._safe_reset()
+
+    def _spin_progress(self) -> None:
+        self._progress_value = (self._progress_value + 4) % 101
+        self.progress_ring.setValue(self._progress_value)
+        self.load_more_ring.setValue(self._progress_value)
+
+    def _show_loading(self, text: str) -> None:
+        self.status_label.hide()
+        self.loading_text.setText(text)
+        self.content_stack.setCurrentIndex(1)
+        self._progress_value = 0
+        self._progress_timer.start()
+
+    def _hide_loading(self) -> None:
+        self._progress_timer.stop()
+        self.progress_ring.setValue(0)
+        self.load_more_ring.setValue(0)
+
+    def _show_status(self, msg: str, is_error: bool = False) -> None:
+        self._hide_loading()
+        self.status_label.setText(msg)
+        self.status_label.setStyleSheet(
+            "color: #e74c3c; font-size: 13px;" if is_error else f"color: {normal_text_color()}; font-size: 13px;"
+        )
+        self.status_label.show()
+
+    def _show_error(self, msg: str) -> None:
+        self._show_status(msg, is_error=True)
+        window = self.window()
+        if window:
+            InfoBar.error(
+                title=self._error_title, content=msg,
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=5000,
+                parent=window,
+            )
+
+    def _clear_grid(self) -> None:
+        while self._worker_layout.count():
+            item = self._worker_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+        self._video_cards.clear()
+        self._cancel_cover_loaders()

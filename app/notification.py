@@ -30,12 +30,14 @@ class NotificationService(QObject):
 
     show_window_requested = Signal()
     quit_requested = Signal()
+    notification_clicked = Signal(str)  # "complete" or "error"
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = Config()
         self._tray: QSystemTrayIcon | None = None
         self._tray_menu: QMenu | None = None
+        self._last_notification_type = ""
         self._init_tray()
 
     def _init_tray(self):
@@ -70,6 +72,11 @@ class NotificationService(QObject):
         # Double-click restores window
         self._tray.activated.connect(self._on_tray_activated)
 
+        # Click notification bubble → emit signal
+        self._tray.messageClicked.connect(
+            lambda: self.notification_clicked.emit(self._last_notification_type)
+        )
+
         self._tray.show()
 
     def _on_tray_activated(self, reason):
@@ -89,6 +96,7 @@ class NotificationService(QObject):
         """Notify the user that a download finished successfully."""
         if not self.config.get("notification_enabled", True):
             return
+        self._last_notification_type = "complete"
         self._show_message(title, message, QSystemTrayIcon.Information)
         self._play_sound()
 
@@ -96,6 +104,7 @@ class NotificationService(QObject):
         """Notify the user that a download failed."""
         if not self.config.get("notification_enabled", True):
             return
+        self._last_notification_type = "error"
         self._show_message(title, message, QSystemTrayIcon.Critical)
 
     def _show_message(self, title: str, body: str, severity):
@@ -116,4 +125,4 @@ class NotificationService(QObject):
                     stderr=subprocess.DEVNULL,
                 )
             except FileNotFoundError:
-                pass
+                logger.warning("Notification sound file not found")

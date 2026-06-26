@@ -264,6 +264,7 @@ class BilibiliDirectWorker(QThread):
 
 class DownloadManager(QObject):
     task_added = Signal(str, str, str)  # tid, filename, platform
+    schedule_state_changed = Signal(bool)  # True=in window, False=outside
 
     def __init__(self, mc: int = 3):
         super().__init__()
@@ -281,6 +282,10 @@ class DownloadManager(QObject):
         self._speed_limit_ref = [self.config.download_speed_limit]
         # Shared transcode mode reference — read at post-merge time
         self._transcode_ref = [self.config.post_download_transcode]
+
+        # Schedule state tracking
+        self._prev_in_window: bool | None = None  # None = uninitialized
+        self._paused_by_schedule = False
 
         # Schedule check timer (every 60 seconds)
         self._schedule_timer = QTimer(self)
@@ -312,19 +317,44 @@ class DownloadManager(QObject):
         # Invalidate schedule cache when settings change
         if hasattr(self, '_schedule_cache'):
             self._schedule_cache.clear()
+        self._prev_in_window = None  # Reset transition tracking
         if self.config.schedule_enabled:
             if not self._schedule_timer.isActive():
                 self._schedule_timer.start()
             self._check_schedule()
         else:
             self._schedule_timer.stop()
+            self._paused_by_schedule = False
             self._schedule()
 
     def _check_schedule(self) -> None:
-        """Periodic check: if we just entered the schedule window, start queued tasks."""
+        """Periodic check: detect schedule window transitions (open/close)."""
         if not self.config.schedule_enabled:
             return
-        if self._is_in_schedule_window():
+        in_window = self._is_in_schedule_window()
+        prev = self._prev_in_window
+
+        if prev is None:
+            # First check — just record state, no action needed
+            self._prev_in_window = in_window
+            if in_window:
+                self._schedule()
+            return
+
+        if prev and not in_window:
+            # Window just closed → pause running downloads, requeue for later
+            self._paused_by_schedule = True
+            self.stop_all()
+            self._prev_in_window = False
+            self.schedule_state_changed.emit(False)
+        elif not prev and in_window:
+            # Window just opened → resume queued downloads
+            self._paused_by_schedule = False
+            self._prev_in_window = True
+            self.schedule_state_changed.emit(True)
+            self._schedule()
+        # else: no transition — periodic check still tries to start queued tasks
+        if in_window:
             self._schedule()
 
     def _is_in_schedule_window(self) -> bool:
@@ -494,10 +524,17 @@ class DownloadManager(QObject):
         self._completed[:] = [p for p in self._completed if p.task_id != tid]
 
     def stop_all(self) -> None:
-        """Cancel all running workers and requeue their tasks for later resume."""
+        """Cancel all running workers and requeue their tasks.
+
+        Cancel all workers first (non-blocking), then wait with a shared
+        deadline to avoid sequential 2s-per-worker blocking on the timer thread.
+        """
         for tid, w in list(self._workers.items()):
             w.cancel()
-            w.wait(2000)
+        deadline = time.monotonic() + 3.0  # shared 3s budget for all workers
+        for tid, w in list(self._workers.items()):
+            remaining = max(0, (deadline - time.monotonic()) * 1000)
+            w.wait(int(remaining))
             task = getattr(w.progress, '_task', None)
             if task:
                 self._queue.appendleft((tid, task, w.out))

@@ -23,9 +23,9 @@ from app.utils.async_worker import AsyncWorker
 from app.utils.worker_mixin import WorkerMixin
 from app.utils.helpers import (
     detect_platform, format_duration,
-    muted_text_color, secondary_text_color, normal_text_color,
     configure_smooth_scroll,
 )
+from app.theme import apply_style
 from app.platforms.base import (
     BasePlatform, VideoInfo, VideoQuality, DownloadTask,
 )
@@ -122,7 +122,7 @@ class BatchResultCard(CardWidget):
         self.meta_label = CaptionLabel(
             f"{platform_name} · {author} · {duration}"
         )
-        self.meta_label.setStyleSheet(f"color: {muted_text_color()};")
+        apply_style(self.meta_label, color="muted")
         info_layout.addWidget(self.meta_label)
 
         controls_layout = QHBoxLayout()
@@ -240,14 +240,14 @@ class BatchResultCard(CardWidget):
                         try:
                             sig.disconnect()
                         except (TypeError, RuntimeError):
-                            pass
+                            logger.debug("Signal disconnect during cleanup (expected)", exc_info=True)
             for sig_name in ("finished", "error"):
                 sig = getattr(w, sig_name, None)
                 if sig is not None:
                     try:
                         sig.disconnect()
                     except (TypeError, RuntimeError):
-                        pass
+                        logger.debug("Signal disconnect in _on_card_finished (expected)", exc_info=True)
 
     def _on_cover_loaded(self, data: bytes) -> None:
         pixmap = QPixmap()
@@ -345,7 +345,7 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         header = TitleLabel("视频下载")
         header.setStyleSheet("font-size: 28px; font-weight: 600;")
         desc = CaptionLabel("支持 Bilibili 视频下载，粘贴视频链接开始解析")
-        desc.setStyleSheet(f"font-size: 14px; color: {muted_text_color()};")
+        apply_style(desc, "font-size: 14px;", "muted")
 
         self.vBoxLayout.addWidget(header)
         self.vBoxLayout.addWidget(desc)
@@ -380,7 +380,7 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         platform_label = CaptionLabel(
             "支持平台: Bilibili"
         )
-        platform_label.setStyleSheet(f"color: {secondary_text_color()}; font-size: 12px;")
+        apply_style(platform_label, "font-size: 12px;", "secondary")
         url_card_layout.addWidget(platform_label)
         self.vBoxLayout.addWidget(self.url_card)
 
@@ -407,16 +407,29 @@ class HomePage(SmoothScrollArea, WorkerMixin):
         self.results_scroll.setWidget(results_scroll_content)
         self.vBoxLayout.addWidget(self.results_scroll, 1)
 
-        self._empty_hint = CaptionLabel("暂无解析结果，请粘贴视频链接开始解析")
-        self._empty_hint.setAlignment(Qt.AlignCenter)
-        self._empty_hint.setStyleSheet(f"color: {secondary_text_color()}; font-size: 14px; padding: 40px;")
+        self._empty_hint = QWidget()
+        eh_layout = QVBoxLayout(self._empty_hint)
+        eh_layout.setAlignment(Qt.AlignCenter)
+        eh_layout.setSpacing(12)
+
+        from qfluentwidgets import IconWidget
+        eh_icon = IconWidget(FIF.SEARCH)
+        eh_icon.setFixedSize(48, 48)
+        eh_layout.addWidget(eh_icon, 0, Qt.AlignCenter)
+
+        eh_title = TitleLabel("暂无解析结果")
+        eh_title.setAlignment(Qt.AlignCenter)
+        eh_title.setStyleSheet("font-size: 20px; font-weight: 600;")
+        eh_layout.addWidget(eh_title)
+
         self.vBoxLayout.addWidget(self._empty_hint)
 
     def _show_status(self, msg: str, is_error: bool = False) -> None:
         self.status_label.setText(msg)
-        self.status_label.setStyleSheet(
-            f"color: #e74c3c; font-size: 13px;" if is_error else f"color: {normal_text_color()}; font-size: 13px;"
-        )
+        if is_error:
+            apply_style(self.status_label, "font-size: 13px;", ("#e74c3c", "#ff6b6b"))
+        else:
+            apply_style(self.status_label, "font-size: 13px;", "normal")
         self.status_label.show()
 
     def _show_error(self, msg: str) -> None:
@@ -440,31 +453,7 @@ class HomePage(SmoothScrollArea, WorkerMixin):
             if not urls:
                 return
             self.enter_batch_mode()
-            mw = self.main_window
-            if mw and hasattr(mw, '_on_batch_urls'):
-                mw._on_batch_urls(urls)
-            else:
-                self._show_status(f"准备批量解析 {len(urls)} 个链接...")
-                self._batch_urls = list(urls)
-                self._batch_index = 0
-                self._submit_next_batch()
-
-    def _submit_next_batch(self) -> None:
-        """Submit next URL in the batch queue."""
-        if not hasattr(self, '_batch_urls') or self._batch_index >= len(self._batch_urls):
-            self._batch_urls = []
-            self._batch_index = 0
-            InfoBar.success(
-                title="批量解析完成",
-                content="所有视频已解析完毕",
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=5000,
-                parent=self.window(),
-            )
-            return
-        url = self._batch_urls[self._batch_index]
-        self._batch_index += 1
-        self._on_parse_url_batch(url)
+            self.main_window._on_batch_urls(urls)
 
     # ── Parse URL ──
 

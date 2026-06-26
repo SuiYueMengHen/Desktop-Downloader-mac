@@ -1,10 +1,11 @@
 """
 Download history manager - JSON-based history persistence.
 
-Batch saves are coalesced via a simple time-based debounce:
-repeated calls within 500ms produce only one disk write.
+Saves are debounced via threading.Timer — repeated calls within 500ms
+produce only one disk write, and the last write is never dropped.
 """
 import json
+import logging
 import threading
 import time
 import uuid
@@ -12,7 +13,7 @@ from pathlib import Path
 
 from app.config import Config
 
-_DEBOUNCE_S = 0.5  # minimum interval between disk writes
+logger = logging.getLogger(__name__)
 
 
 class HistoryManager:
@@ -22,8 +23,10 @@ class HistoryManager:
         self.config = Config()
         self._history_file = self.config.config_dir / "history.json"
         self._entries: list[dict] = []
-        self._last_save_time: float = 0.0
+        self._dirty = False
+        self._save_timer: threading.Timer | None = None
         self._save_lock = threading.Lock()
+        self._debounce_s = 0.5
         self.load()
 
     @property
@@ -37,26 +40,40 @@ class HistoryManager:
                     data = json.load(f)
                     with self._save_lock:
                         self._entries = data if isinstance(data, list) else []
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("History file corrupt, resetting: %s", e)
                 with self._save_lock:
                     self._entries = []
         else:
             with self._save_lock:
                 self._entries = []
 
-    def save(self) -> None:
-        """Debounced write — coalesces burst calls into a single disk write."""
+    def _do_save(self) -> None:
+        """Actual disk write — called by debounce timer."""
+        try:
+            self._history_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._history_file, "w", encoding="utf-8") as f:
+                json.dump(self._entries, f, indent=2, ensure_ascii=False)
+        except OSError as e:
+            logger.warning("Failed to save history: %s", e)
         with self._save_lock:
-            now = time.monotonic()
-            if now - self._last_save_time < _DEBOUNCE_S:
-                return  # skip — last write was recent
-            self._last_save_time = now
-            try:
-                self._history_file.parent.mkdir(parents=True, exist_ok=True)
-                with open(self._history_file, "w", encoding="utf-8") as f:
-                    json.dump(self._entries, f, indent=2, ensure_ascii=False)
-            except OSError:
-                pass
+            self._dirty = False
+
+    def _schedule_save(self) -> None:
+        """Debounced save — coalesces burst calls into a single disk write."""
+        if self._save_timer is not None and self._save_timer.is_alive():
+            return
+        self._save_timer = threading.Timer(self._debounce_s, self._do_save)
+        self._save_timer.daemon = True
+        self._save_timer.start()
+
+    def save(self) -> None:
+        """Mark dirty and schedule a debounced write. Never drops data."""
+        with self._save_lock:
+            was_clean = not self._dirty
+            self._dirty = True
+        if was_clean:
+            self._schedule_save()
 
     def add_entry(self, platform: str, video_id: str, title: str,
                   quality: str, file_path: str, file_size: int,
@@ -103,6 +120,16 @@ class HistoryManager:
             self.save()
             return True
         return False
+
+    def delete_many(self, task_ids: list[str]) -> int:
+        """Delete all entries matching the given task IDs. Returns count deleted."""
+        original_count = len(self._entries)
+        id_set = set(task_ids)
+        self._entries = [e for e in self._entries if e.get("task_id") not in id_set]
+        deleted = original_count - len(self._entries)
+        if deleted > 0:
+            self.save()
+        return deleted
 
     def clear_all(self) -> None:
         with self._save_lock:

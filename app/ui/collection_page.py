@@ -21,8 +21,10 @@ from qfluentwidgets import (
 from app.utils.cover_loader import CoverLoader, CoverSignals
 from app.utils.async_worker import AsyncWorker
 from app.utils.worker_mixin import WorkerMixin
-from app.utils.helpers import format_count, format_duration, muted_text_color, secondary_text_color, normal_text_color, configure_smooth_scroll
-from app.platforms.bilibili import BilibiliPlatform, extract_series_id
+from app.utils.helpers import format_count, format_duration, configure_smooth_scroll
+from app.theme import apply_style
+from app.platforms.bilibili import BilibiliPlatform
+from app.utils.helpers import extract_series_id
 
 
 class SeriesInfoWorker(AsyncWorker):
@@ -82,13 +84,13 @@ class VideoCheckCard(CardWidget):
 
         self.title_label = BodyLabel(self._title[:60])
         self.title_label.setWordWrap(True)
-        self.title_label.setStyleSheet(f"font-size: 13px; color: {normal_text_color()};")
+        apply_style(self.title_label, "font-size: 13px;", "normal")
         info_layout.addWidget(self.title_label)
 
         duration = video.get("duration", 0)
         play = format_count(video.get("play", 0))
         meta = CaptionLabel(f"{play}次播放 · {format_duration(duration)}")
-        meta.setStyleSheet(f"color: {muted_text_color()}; font-size: 11px;")
+        apply_style(meta, "font-size: 11px;", "muted")
         info_layout.addWidget(meta)
 
         info_layout.addStretch()
@@ -134,6 +136,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self._progress_timer.timeout.connect(self._spin_progress)
 
         self._setup_ui()
+        self._worker_layout = self.cards_layout
         self._init_platform()
         WorkerMixin.__init_from__(self)
         configure_smooth_scroll(self)
@@ -162,7 +165,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self.vBoxLayout.addWidget(header)
 
         desc = CaptionLabel("粘贴UP主合集链接，查看合集视频列表并选择下载")
-        desc.setStyleSheet(f"font-size: 14px; color: {muted_text_color()};")
+        apply_style(desc, "font-size: 14px;", "muted")
         self.vBoxLayout.addWidget(desc)
 
         # URL Input
@@ -203,9 +206,9 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self.collection_name.setStyleSheet("font-size: 16px;")
         self.collection_name.setWordWrap(True)
         self.collection_meta = CaptionLabel("")
-        self.collection_meta.setStyleSheet(f"color: {secondary_text_color()}; font-size: 12px;")
+        apply_style(self.collection_meta, "font-size: 12px;", "secondary")
         self.collection_intro = CaptionLabel("")
-        self.collection_intro.setStyleSheet(f"color: {muted_text_color()}; font-size: 12px;")
+        apply_style(self.collection_intro, "font-size: 12px;", "muted")
         self.collection_intro.setWordWrap(True)
         self.collection_intro.setMaximumHeight(60)
 
@@ -229,7 +232,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         ep_layout.setAlignment(Qt.AlignCenter)
         self.empty_hint = CaptionLabel("在上方输入合集链接后点击「查看」")
         self.empty_hint.setAlignment(Qt.AlignCenter)
-        self.empty_hint.setStyleSheet(f"color: {secondary_text_color()}; font-size: 14px;")
+        apply_style(self.empty_hint, "font-size: 14px;", "secondary")
         ep_layout.addWidget(self.empty_hint)
         self.content_stack.addWidget(self.empty_page)
 
@@ -243,7 +246,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self.progress_ring.setStrokeWidth(6)
         self.loading_text = CaptionLabel("正在获取合集信息...")
         self.loading_text.setAlignment(Qt.AlignCenter)
-        self.loading_text.setStyleSheet(f"color: {muted_text_color()}; font-size: 14px;")
+        apply_style(self.loading_text, "font-size: 14px;", "muted")
         lp_layout.addWidget(self.progress_ring, 0, Qt.AlignCenter)
         lp_layout.addSpacing(12)
         lp_layout.addWidget(self.loading_text, 0, Qt.AlignCenter)
@@ -261,7 +264,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self.select_all_cb.setChecked(True)
         self.select_all_cb.stateChanged.connect(self._on_select_all_changed)
         self.video_count_label = CaptionLabel("共 0 个视频")
-        self.video_count_label.setStyleSheet(f"color: {muted_text_color()}; font-size: 12px;")
+        apply_style(self.video_count_label, "font-size: 12px;", "muted")
 
         select_bar.addWidget(self.select_all_cb)
         select_bar.addWidget(self.video_count_label)
@@ -310,52 +313,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self.vBoxLayout.addWidget(self.content_stack, 1)
         self.vBoxLayout.addStretch()
 
-    def _spin_progress(self) -> None:
-        self._progress_value = (self._progress_value + 4) % 101
-        self.progress_ring.setValue(self._progress_value)
-        self.load_more_ring.setValue(self._progress_value)
 
-    def _show_loading(self, text: str) -> None:
-        self.status_label.hide()
-        self.loading_text.setText(text)
-        self.content_stack.setCurrentIndex(1)
-        self._progress_value = 0
-        self._progress_timer.start()
-
-    def _hide_loading(self) -> None:
-        self._progress_timer.stop()
-        self.progress_ring.setValue(0)
-        self.load_more_ring.setValue(0)
-
-    def _show_status(self, msg: str, is_error: bool = False) -> None:
-        self._hide_loading()
-        self.status_label.setText(msg)
-        self.status_label.setStyleSheet(
-            "color: #e74c3c; font-size: 13px;" if is_error else f"color: {normal_text_color()}; font-size: 13px;"
-        )
-        self.status_label.show()
-
-    def _show_error(self, msg: str) -> None:
-        self._show_status(msg, is_error=True)
-        if self.window():
-            InfoBar.error(
-                title="请求失败", content=msg,
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=5000,
-                parent=self.window(),
-            )
-
-    def _on_safe_reset(self) -> None:
-        """Reset page-specific state before worker cleanup."""
-        self._loading = False
-        self._load_cancelled = True
-        self._progress_timer.stop()
-        self.progress_ring.setValue(0)
-        self.load_more_ring.setValue(0)
-
-    def on_page_left(self) -> None:
-        """Cancel in-flight workers and cover loaders when leaving the page."""
-        self._safe_reset()
 
     def reset_to_idle(self) -> None:
         """Reset page to idle state after an error."""
@@ -407,7 +365,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self.info_card.setVisible(False)
         self.cover_label.clear()
 
-        self._clear_cards()
+        self._clear_grid()
 
         w = SeriesInfoWorker(self._platform, series_id)
         w.finished.connect(self._on_info_done, Qt.QueuedConnection)
@@ -498,7 +456,7 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
             try:
                 self._add_video_cards(videos)
             except Exception:
-                pass
+                logger.exception("Failed to add video cards in collection_page")
 
         # Update select all and count
         self.video_count_label.setText(f"共 {self._total_videos} 个视频，已加载 {len(self._videos_data)}")
@@ -603,14 +561,6 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         ]
         self.parse_batch_requested.emit(urls)
 
-    def _clear_cards(self) -> None:
-        while self.cards_layout.count():
-            item = self.cards_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-        self._video_cards.clear()
-        self._cancel_cover_loaders()
-
     def clear(self) -> None:
         self._safe_reset()
         self._series_id = None
@@ -624,5 +574,5 @@ class CollectionPage(SmoothScrollArea, WorkerMixin):
         self.content_stack.setCurrentIndex(0)
         self.info_card.setVisible(False)
         self.cover_label.clear()
-        self._clear_cards()
+        self._clear_grid()
         self.status_label.hide()

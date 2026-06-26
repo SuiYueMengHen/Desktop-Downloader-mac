@@ -12,11 +12,11 @@ from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QFrame
 from qfluentwidgets import (
     Dialog, PushButton, LineEdit, CaptionLabel,
     InfoBar, InfoBarPosition, FluentIcon as FIF,
-    PrimaryPushButton,
+    PrimaryPushButton, isDarkTheme, setCustomStyleSheet,
 )
 
 from app.cookie_manager import CookieManager
-from app.utils.helpers import muted_text_color
+from app.theme import apply_style
 
 
 class BilibiliQrLoginThread(QThread):
@@ -143,8 +143,10 @@ class BilibiliLoginDialog(Dialog):
 
         self.qr_image_label = QFrame()
         self.qr_image_label.setFixedSize(260, 260)
-        self.qr_image_label.setStyleSheet(
-            "background-color: white; border-radius: 8px;"
+        setCustomStyleSheet(
+            self.qr_image_label,
+            "background-color: #ffffff; border-radius: 8px;",
+            "background-color: #2d2d2d; border-radius: 8px;",
         )
         self.qr_image_layout = QVBoxLayout(self.qr_image_label)
         self.qr_pixmap_label = CaptionLabel("点击下方按钮生成二维码")
@@ -153,7 +155,7 @@ class BilibiliLoginDialog(Dialog):
 
         self.qr_status = CaptionLabel("")
         self.qr_status.setAlignment(Qt.AlignCenter)
-        self.qr_status.setStyleSheet(f"color: {muted_text_color()};")
+        apply_style(self.qr_status, color="muted")
 
         qr_btn_layout = QHBoxLayout()
         self.qr_gen_btn = PrimaryPushButton(FIF.QRCODE, "生成二维码")
@@ -171,7 +173,7 @@ class BilibiliLoginDialog(Dialog):
         # ── Separator ──
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("color: #ddd;")
+        apply_style(sep, color=("#dddddd", "#555555"))
         self.tabLayout.addWidget(sep)
 
         # ── Manual Cookie Section ──
@@ -328,7 +330,7 @@ class BilibiliLoginDialog(Dialog):
         self._polling_active = False
         self._poll_timer.stop()
         self._qr_thread.stop()
-        if not self._qr_thread.wait(3000):
-            self._qr_thread.terminate()
-            self._qr_thread.wait()
+        if not self._qr_thread.wait(5000):
+            import logging
+            logging.getLogger(__name__).warning("QR login thread did not finish within 5s")
         super().closeEvent(event)

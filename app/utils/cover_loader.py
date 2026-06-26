@@ -5,8 +5,11 @@ connections across repeated cover loads. An in-memory LRU cache avoids
 redundant network requests for the same URL. A batch-aware delay mechanism
 prevents thread-storm when many cards are created at once.
 """
+import logging
 import threading
 from functools import lru_cache
+
+logger = logging.getLogger(__name__)
 
 import httpx
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
@@ -57,8 +60,8 @@ class CoverLoader(QRunnable):
                     self.signals.url_loaded.emit(self.key, data)
                 else:
                     self.signals.loaded.emit(data)
-        except httpx.HTTPError:
-            pass
+        except httpx.HTTPError as e:
+            logger.debug("Cover load failed: %s", e)
         finally:
             _COVER_SEM.release()
 

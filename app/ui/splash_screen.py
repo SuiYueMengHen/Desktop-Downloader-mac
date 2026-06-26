@@ -2,7 +2,7 @@
 FluentUI-style startup splash overlay with dark/light mode support.
 Appears briefly during initialization, then fades out.
 """
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QEvent
 from PySide6.QtGui import QPainter, QColor, QFont
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QGraphicsOpacityEffect
 
@@ -12,7 +12,7 @@ from qfluentwidgets import (
 )
 
 from app import __version__
-from app.utils.helpers import muted_text_color
+from app.theme import apply_style
 
 
 class SplashOverlay(QWidget):
@@ -102,9 +102,8 @@ class SplashOverlay(QWidget):
     def _update_theme(self) -> None:
         """Apply current theme colors to icon and all labels."""
         self._icon_label.setPixmap(FIF.DOWNLOAD.icon().pixmap(64, 64))
-        mc = muted_text_color()
-        self._version_label.setStyleSheet(f"color: {mc}; font-size: 13px;")
-        self._status_label.setStyleSheet(f"color: {mc}; font-size: 13px;")
+        apply_style(self._version_label, "font-size: 13px;", "muted")
+        apply_style(self._status_label, "font-size: 13px;", "muted")
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -122,3 +121,8 @@ class SplashOverlay(QWidget):
         if self.parent():
             self.setGeometry(self.parent().rect())
         super().resizeEvent(event)
+
+    def eventFilter(self, obj, event):
+        if obj == self.parent() and event.type() == QEvent.Resize:
+            self.setGeometry(self.parent().rect())
+        return False

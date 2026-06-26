@@ -1,22 +1,24 @@
 """
 Download history page - browse, search, delete history, open download folder.
 """
+import csv
 import os
 from datetime import datetime
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QFrame,
+    QVBoxLayout, QHBoxLayout, QFrame, QWidget, QCheckBox,
 )
 
 from qfluentwidgets import (
-    SearchLineEdit, PushButton,
+    SearchLineEdit, PushButton, RoundMenu, Action,
     CardWidget, CaptionLabel, StrongBodyLabel,
     InfoBar, InfoBarPosition, FluentIcon as FIF,
     TitleLabel, HorizontalSeparator, SmoothScrollArea,
 )
 
 from app.history_manager import HistoryManager
-from app.utils.helpers import format_size, format_duration, muted_text_color, secondary_text_color, configure_smooth_scroll, open_download_folder
+from app.utils.helpers import format_size, format_duration, configure_smooth_scroll, open_download_folder
+from app.theme import apply_style
 
 
 class HistoryCard(CardWidget):
@@ -35,6 +37,11 @@ class HistoryCard(CardWidget):
 
         # Title row
         title_layout = QHBoxLayout()
+        self.checkbox = QCheckBox()
+        self.checkbox.setVisible(False)
+        self.checkbox.setProperty("task_id", self._task_id)
+        title_layout.addWidget(self.checkbox, 0, Qt.AlignLeft)
+
         self.title_label = StrongBodyLabel(
             entry.get("title", "未知标题")[:60]
         )
@@ -74,7 +81,7 @@ class HistoryCard(CardWidget):
             meta_parts.append(dt.strftime("%Y-%m-%d %H:%M"))
 
         self.meta_label = CaptionLabel(" · ".join(meta_parts))
-        self.meta_label.setStyleSheet(f"color: {secondary_text_color()}; font-size: 12px;")
+        apply_style(self.meta_label, "font-size: 12px;", "secondary")
         layout.addWidget(self.meta_label)
 
         # Action buttons
@@ -101,6 +108,8 @@ class HistoryCard(CardWidget):
 class HistoryPage(SmoothScrollArea):
     """Download history page with search and management."""
 
+    switch_to_home = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window = parent
@@ -113,6 +122,7 @@ class HistoryPage(SmoothScrollArea):
         self._refresh_timer.setInterval(500)  # 500ms debounce
         self._refresh_timer.timeout.connect(self._do_refresh)
         self._pending_refresh = False
+        self._batch_mode = False
 
         self._setup_ui()
         configure_smooth_scroll(self)
@@ -136,14 +146,46 @@ class HistoryPage(SmoothScrollArea):
         header_layout.addWidget(header)
         header_layout.addStretch()
 
+        # Export button with dropdown menu
+        self._export_btn = PushButton(FIF.DOWNLOAD, "导出")
+        self._export_menu = RoundMenu(parent=self)
+        self._export_menu.addAction(
+            Action(FIF.DOWNLOAD, "导出 CSV...", triggered=self._export_csv)
+        )
+        self._export_menu.addAction(
+            Action(FIF.SHARE, "导出 JSON...", triggered=self._export_json)
+        )
+        self._export_btn.setMenu(self._export_menu)
+        header_layout.addWidget(self._export_btn)
+
+        # Batch mode toggle
+        self._batch_toggle_btn = PushButton("批量删除")
+        self._batch_toggle_btn.clicked.connect(self._toggle_batch_mode)
+        header_layout.addWidget(self._batch_toggle_btn)
+
         self.clear_all_btn = PushButton(FIF.DELETE, "清空历史")
         self.clear_all_btn.clicked.connect(self._on_clear_all)
         header_layout.addWidget(self.clear_all_btn)
         self.vBoxLayout.addLayout(header_layout)
 
         desc = CaptionLabel("查看和管理已完成的下载记录")
-        desc.setStyleSheet(f"font-size: 14px; color: {muted_text_color()};")
+        apply_style(desc, "font-size: 14px;", "muted")
         self.vBoxLayout.addWidget(desc)
+
+        # Stats bar
+        self._stats_widget = QWidget()
+        stats_layout = QHBoxLayout(self._stats_widget)
+        stats_layout.setContentsMargins(0, 0, 0, 0)
+        stats_layout.setSpacing(24)
+        self._stat_total = CaptionLabel("总计: --")
+        self._stat_size = CaptionLabel("总大小: --")
+        self._stat_platform = CaptionLabel("平台: --")
+        self._stat_avg = CaptionLabel("平均: --")
+        for label in (self._stat_total, self._stat_size, self._stat_platform, self._stat_avg):
+            apply_style(label, "font-size: 12px;", "muted")
+            stats_layout.addWidget(label)
+        stats_layout.addStretch()
+        self.vBoxLayout.addWidget(self._stats_widget)
 
         # Search bar
         search_layout = QHBoxLayout()
@@ -163,12 +205,46 @@ class HistoryPage(SmoothScrollArea):
         self.cards_layout.setSpacing(10)
         self.vBoxLayout.addLayout(self.cards_layout)
 
-        # Empty state
-        self.empty_label = CaptionLabel("暂无下载历史")
-        self.empty_label.setAlignment(Qt.AlignCenter)
-        self.empty_label.setStyleSheet(f"color: {secondary_text_color()}; font-size: 14px; padding: 40px;")
-        self.empty_label.hide()
-        self.vBoxLayout.addWidget(self.empty_label)
+        # Batch action bar (hidden by default)
+        self._batch_bar = QFrame()
+        batch_bar_layout = QHBoxLayout(self._batch_bar)
+        batch_bar_layout.setContentsMargins(0, 0, 0, 0)
+        batch_bar_layout.addStretch()
+        self._batch_execute_btn = PushButton(FIF.DELETE, "删除选中 (0)")
+        self._batch_execute_btn.setFixedWidth(140)
+        self._batch_execute_btn.setEnabled(False)
+        self._batch_execute_btn.clicked.connect(self._execute_batch_delete)
+        batch_bar_layout.addWidget(self._batch_execute_btn)
+        self._batch_cancel_btn = PushButton("取消")
+        self._batch_cancel_btn.setFixedWidth(80)
+        self._batch_cancel_btn.clicked.connect(self._cancel_batch_mode)
+        batch_bar_layout.addWidget(self._batch_cancel_btn)
+        self._batch_bar.setVisible(False)
+        self.vBoxLayout.addWidget(self._batch_bar)
+
+        self.empty_widget = QWidget()
+        empty_layout = QVBoxLayout(self.empty_widget)
+        empty_layout.setAlignment(Qt.AlignCenter)
+        empty_layout.setSpacing(12)
+
+        from qfluentwidgets import IconWidget
+        empty_icon = IconWidget(FIF.HISTORY)
+        empty_icon.setFixedSize(48, 48)
+        empty_layout.addWidget(empty_icon, 0, Qt.AlignCenter)
+
+        empty_title = TitleLabel("暂无下载历史")
+        empty_title.setAlignment(Qt.AlignCenter)
+        empty_title.setStyleSheet("font-size: 20px; font-weight: 600;")
+        empty_layout.addWidget(empty_title)
+
+        self.empty_go_btn = PushButton(FIF.HOME, "开始下载")
+        self.empty_go_btn.setFixedHeight(36)
+        self.empty_go_btn.clicked.connect(self.switch_to_home.emit)
+        empty_layout.addSpacing(8)
+        empty_layout.addWidget(self.empty_go_btn, 0, Qt.AlignCenter)
+
+        self.empty_widget.hide()
+        self.vBoxLayout.addWidget(self.empty_widget)
 
         self.vBoxLayout.addStretch()
 
@@ -181,10 +257,25 @@ class HistoryPage(SmoothScrollArea):
         self._pending_refresh = True
         self._refresh_timer.start()
 
+    def _update_stats(self) -> None:
+        """Update statistics labels from history entries."""
+        entries = self._history_manager.get_all()
+        total = len(entries)
+        total_size = sum(e.get("file_size", 0) for e in entries)
+        platforms = set(e.get("platform", "").lower() for e in entries if e.get("platform"))
+        self._stat_total.setText(f"总计: {total} 个文件")
+        self._stat_size.setText(f"总大小: {format_size(total_size) if total_size else '--'}")
+        self._stat_platform.setText(f"平台: {', '.join(sorted(platforms)).upper() if platforms else '--'}")
+        avg = total_size // total if total > 0 else 0
+        self._stat_avg.setText(f"平均: {format_size(avg) if avg else '--'}")
+        # Hide stats if no entries
+        self._stats_widget.setVisible(total > 0)
+
     def _do_refresh(self) -> None:
         """Actually reload history from disk and refresh the UI."""
         self._pending_refresh = False
         self._history_manager.load()
+        self._update_stats()
         self._load_history()
 
     def _load_history(self) -> None:
@@ -201,10 +292,10 @@ class HistoryPage(SmoothScrollArea):
             entries = self._history_manager.get_all()
 
         if not entries:
-            self.empty_label.show()
+            self.empty_widget.show()
             return
 
-        self.empty_label.hide()
+        self.empty_widget.hide()
 
         # Group by video_id for multi-P
         grouped = {}
@@ -261,7 +352,7 @@ class HistoryPage(SmoothScrollArea):
                     dt = datetime.fromtimestamp(timestamp)
                     meta_parts.append(dt.strftime("%Y-%m-%d"))
                 meta_label = CaptionLabel(" · ".join(meta_parts))
-                meta_label.setStyleSheet(f"color: {secondary_text_color()}; font-size: 12px;")
+                apply_style(meta_label, "font-size: 12px;", "secondary")
                 card_layout.addWidget(meta_label)
 
                 card_layout.addWidget(HorizontalSeparator())
@@ -270,18 +361,26 @@ class HistoryPage(SmoothScrollArea):
                     ep_row = QHBoxLayout()
                     ep_row.setSpacing(8)
 
+                    # Batch checkbox for this sub-entry
+                    cb = QCheckBox()
+                    cb.setVisible(False)
+                    tid = e.get("task_id", "")
+                    cb.setProperty("task_id", tid)
+                    cb.stateChanged.connect(self._update_batch_count)
+                    ep_row.addWidget(cb, 0, Qt.AlignLeft)
+
                     pl = e.get("page_label", "")
                     ep_title = e.get("title", "")[:40]
                     dur = format_duration(e.get("duration", 0)) if e.get("duration") else ""
 
                     ep_label = CaptionLabel(f"{pl}  {ep_title}")
-                    ep_label.setStyleSheet(f"color: {muted_text_color()}; font-size: 12px;")
+                    apply_style(ep_label, "font-size: 12px;", "muted")
                     ep_label.setToolTip(e.get("title", ""))
                     ep_label.setMinimumWidth(120)
 
                     if dur:
                         dur_label = CaptionLabel(dur)
-                        dur_label.setStyleSheet(f"color: {muted_text_color()}; font-size: 11px;")
+                        apply_style(dur_label, "font-size: 11px;", "muted")
                         ep_row.addWidget(dur_label)
 
                     ep_row.addWidget(ep_label, 1)
@@ -321,6 +420,9 @@ class HistoryPage(SmoothScrollArea):
         finally:
             self.setUpdatesEnabled(True)
 
+        # Apply batch mode visibility to all checkboxes
+        self._update_batch_mode_ui()
+
     def _create_history_card(self, entry: dict) -> HistoryCard:
         """Create a HistoryCard widget from a history entry dict.
 
@@ -329,6 +431,7 @@ class HistoryPage(SmoothScrollArea):
         card = HistoryCard(entry)
         card.open_folder_clicked.connect(self._on_open_folder)
         card.delete_clicked.connect(self._delete_entry)
+        card.checkbox.stateChanged.connect(self._update_batch_count)
         return card
 
     def append_entry(self) -> None:
@@ -348,7 +451,9 @@ class HistoryPage(SmoothScrollArea):
         entry = entries[0]
         card = self._create_history_card(entry)
         self.cards_layout.insertWidget(0, card)
-        self.empty_label.hide()
+        if hasattr(self, 'empty_widget'):
+            self.empty_widget.hide()
+        self._update_batch_mode_ui()
 
     def _on_search(self) -> None:
         query = self.search_input.text().strip()
@@ -393,3 +498,160 @@ class HistoryPage(SmoothScrollArea):
                 position=InfoBarPosition.TOP_RIGHT, duration=2000,
                 parent=self.window(),
             )
+
+    def _export_csv(self) -> None:
+        """Export visible history entries to a CSV file."""
+        from PySide6.QtWidgets import QFileDialog
+
+        entries = self._history_manager.get_all() if not self._current_query else self._history_manager.search(self._current_query)
+        if not entries:
+            InfoBar.warning(
+                title="无数据", content="没有可导出的历史记录",
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=2000,
+                parent=self.window(),
+            )
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self.window(), "导出 CSV", "", "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["task_id", "platform", "title", "quality",
+                                 "file_path", "file_size", "duration",
+                                 "timestamp", "page_label", "page_count"])
+                for e in entries:
+                    writer.writerow([
+                        e.get("task_id", ""),
+                        e.get("platform", ""),
+                        e.get("title", ""),
+                        e.get("quality", ""),
+                        e.get("file_path", ""),
+                        e.get("file_size", 0),
+                        e.get("duration", 0),
+                        e.get("timestamp", 0),
+                        e.get("page_label", ""),
+                        e.get("page_count", 0),
+                    ])
+            InfoBar.success(
+                title="导出成功", content=f"已导出 {len(entries)} 条记录到 CSV",
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=2000,
+                parent=self.window(),
+            )
+        except OSError as e:
+            InfoBar.error(
+                title="导出失败", content=str(e),
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=3000,
+                parent=self.window(),
+            )
+
+    def _export_json(self) -> None:
+        """Export visible history entries to a JSON file."""
+        from PySide6.QtWidgets import QFileDialog
+
+        entries = self._history_manager.get_all() if not self._current_query else self._history_manager.search(self._current_query)
+        if not entries:
+            InfoBar.warning(
+                title="无数据", content="没有可导出的历史记录",
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=2000,
+                parent=self.window(),
+            )
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self.window(), "导出 JSON", "", "JSON Files (*.json)"
+        )
+        if not path:
+            return
+
+        try:
+            import json
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(entries, f, indent=2, ensure_ascii=False)
+            InfoBar.success(
+                title="导出成功", content=f"已导出 {len(entries)} 条记录到 JSON",
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=2000,
+                parent=self.window(),
+            )
+        except OSError as e:
+            InfoBar.error(
+                title="导出失败", content=str(e),
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=3000,
+                parent=self.window(),
+            )
+
+    def _toggle_batch_mode(self) -> None:
+        """Toggle batch delete mode on/off."""
+        self._batch_mode = not self._batch_mode
+        self._update_batch_mode_ui()
+        if self._batch_mode:
+            self._batch_toggle_btn.setText("取消批量")
+        else:
+            self._batch_toggle_btn.setText("批量删除")
+
+    def _update_batch_mode_ui(self) -> None:
+        """Show or hide batch mode checkboxes and action bar."""
+        for cb in self.container.findChildren(QCheckBox):
+            cb.setVisible(self._batch_mode)
+            if not self._batch_mode:
+                cb.setChecked(False)
+        self._batch_bar.setVisible(self._batch_mode)
+        self._update_batch_count()
+
+    def _update_batch_count(self) -> None:
+        """Recalculate and update the batch delete button text."""
+        count = 0
+        for cb in self.container.findChildren(QCheckBox):
+            if cb.isChecked():
+                count += 1
+        self._batch_execute_btn.setText(f"删除选中 ({count})")
+        self._batch_execute_btn.setEnabled(count > 0)
+
+    def _execute_batch_delete(self) -> None:
+        """Delete all checked entries and exit batch mode."""
+        task_ids = []
+        for cb in self.container.findChildren(QCheckBox):
+            if cb.isChecked():
+                tid = cb.property("task_id")
+                if tid:
+                    task_ids.append(tid)
+        if not task_ids:
+            return
+
+        from qfluentwidgets import MessageBox
+        msg = MessageBox(
+            "批量删除",
+            f"确定要删除选中的 {len(task_ids)} 条记录吗？\n此操作不可撤销。",
+            self.window(),
+        )
+        msg.yesButton.setText("确定")
+        msg.cancelButton.setText("取消")
+        if not msg.exec():
+            return
+
+        deleted = self._history_manager.delete_many(task_ids)
+        self._batch_mode = False
+        self._batch_toggle_btn.setText("批量删除")
+        self._load_history()
+        InfoBar.success(
+            title="删除成功", content=f"已删除 {deleted} 条记录",
+            orient=Qt.Horizontal, isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT, duration=2000,
+            parent=self.window(),
+        )
+
+    def _cancel_batch_mode(self) -> None:
+        """Exit batch mode without deleting anything."""
+        self._batch_mode = False
+        self._batch_toggle_btn.setText("批量删除")
+        self._update_batch_mode_ui()

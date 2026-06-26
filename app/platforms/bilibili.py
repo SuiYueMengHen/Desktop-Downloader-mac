@@ -3,6 +3,7 @@ Bilibili platform adapter.
   - Parse: bilibili-api-python (reliable Bilibili API integration)
   - Download: yt-dlp (handles DASH merging, progress, retries)
 """
+import logging
 import re
 import sys
 import asyncio
@@ -19,12 +20,12 @@ from bilibili_api.utils.network import Api
 from app.platforms.base import BasePlatform, VideoInfo, VideoQuality, MediaStream
 from app.cookie_manager import CookieManager
 
+logger = logging.getLogger(__name__)
+
 
 def _log_error(msg: str, exc: Exception = None) -> None:
-    """Print error to terminal (stderr) for debugging."""
-    print(f"[ERROR] {msg}", file=sys.stderr, flush=True)
-    if exc:
-        traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
+    """Log error with optional exception."""
+    logger.warning("%s", msg, exc_info=exc)
 
 
 BILIBILI_QUALITIES = {
@@ -77,16 +78,6 @@ def extract_uid(url: str) -> Optional[int]:
     if m: return int(m.group(1))
     m = re.search(r'bilibili\.com/(\d+)', url)
     if m: return int(m.group(1))
-    return None
-
-
-def extract_series_id(url: str) -> Optional[int]:
-    """Extract collection/series ID from Bilibili collection URL.
-    URL format: https://space.bilibili.com/{uid}/lists/{series_id}
-    """
-    m = re.search(r'/lists/(\d+)', url)
-    if m:
-        return int(m.group(1))
     return None
 
 
@@ -188,7 +179,7 @@ class BilibiliPlatform(BasePlatform):
                     if q not in qualities and q != VideoQuality.UNKNOWN:
                         qualities.append(q)
         except Exception:
-            pass
+            logger.warning("Failed to detect DASH qualities for %s", bvid)
 
         # Detect multi-P (pages/parts)
         pages_raw = info.get("pages", [])

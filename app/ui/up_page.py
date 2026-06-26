@@ -21,7 +21,8 @@ from qfluentwidgets import (
 from app.utils.cover_loader import CoverLoader, CoverSignals
 from app.utils.async_worker import AsyncWorker
 from app.utils.worker_mixin import WorkerMixin
-from app.utils.helpers import format_count, format_duration, format_size, muted_text_color, secondary_text_color, normal_text_color, configure_smooth_scroll
+from app.utils.helpers import format_count, format_duration, format_size, configure_smooth_scroll
+from app.theme import apply_style
 from app.platforms.bilibili import BilibiliPlatform, extract_uid
 
 
@@ -79,14 +80,14 @@ class VideoCard(CardWidget):
         self.title_label = BodyLabel(title[:50])
         self.title_label.setToolTip(title)
         self.title_label.setWordWrap(True)
-        self.title_label.setStyleSheet(f"font-size: 13px; color: {normal_text_color()};")
+        apply_style(self.title_label, "font-size: 13px;", "normal")
         layout.addWidget(self.title_label)
 
         # Meta row
         duration = video.get("duration", 0)
         play = format_count(video.get("play", 0))
         meta = CaptionLabel(f"{play}次播放 · {format_duration(duration)}")
-        meta.setStyleSheet(f"color: {muted_text_color()}; font-size: 11px;")
+        apply_style(meta, "font-size: 11px;", "muted")
         layout.addWidget(meta)
 
         # Parse button
@@ -125,6 +126,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         self._progress_timer.timeout.connect(self._spin_progress)
 
         self._setup_ui()
+        self._worker_layout = self.grid_layout
         self._load_cancelled = False
         WorkerMixin.__init_from__(self)
         configure_smooth_scroll(self)
@@ -153,7 +155,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         self.vBoxLayout.addWidget(header)
 
         desc = CaptionLabel("粘贴UP主空间链接，查看视频列表并选择下载")
-        desc.setStyleSheet(f"font-size: 14px; color: {muted_text_color()};")
+        apply_style(desc, "font-size: 14px;", "muted")
         self.vBoxLayout.addWidget(desc)
 
         # URL Input
@@ -193,9 +195,9 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         self.up_name = TitleLabel("")
         self.up_name.setStyleSheet("font-size: 20px;")
         self.up_sign = CaptionLabel("")
-        self.up_sign.setStyleSheet(f"color: {muted_text_color()}; font-size: 13px;")
+        apply_style(self.up_sign, "font-size: 13px;", "muted")
         self.up_stats = CaptionLabel("")
-        self.up_stats.setStyleSheet(f"color: {secondary_text_color()}; font-size: 12px;")
+        apply_style(self.up_stats, "font-size: 12px;", "secondary")
 
         info_text.addWidget(self.up_name)
         info_text.addWidget(self.up_sign)
@@ -217,7 +219,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         ep_layout.setAlignment(Qt.AlignCenter)
         self.empty_hint = CaptionLabel("在上方输入UP主空间链接后点击「查看」")
         self.empty_hint.setAlignment(Qt.AlignCenter)
-        self.empty_hint.setStyleSheet(f"color: {secondary_text_color()}; font-size: 14px;")
+        apply_style(self.empty_hint, "font-size: 14px;", "secondary")
         ep_layout.addWidget(self.empty_hint)
         self.content_stack.addWidget(self.empty_page)
 
@@ -233,7 +235,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
 
         self.loading_text = CaptionLabel("正在获取UP主信息...")
         self.loading_text.setAlignment(Qt.AlignCenter)
-        self.loading_text.setStyleSheet(f"color: {muted_text_color()}; font-size: 14px;")
+        apply_style(self.loading_text, "font-size: 14px;", "muted")
 
         lp_layout.addWidget(self.progress_ring, 0, Qt.AlignCenter)
         lp_layout.addSpacing(12)
@@ -282,57 +284,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
 
         self.vBoxLayout.addStretch()
 
-    def _spin_progress(self) -> None:
-        # Loop 0→100→0→100... for indeterminate progress animation
-        self._progress_value = (self._progress_value + 4) % 101
-        self.progress_ring.setValue(self._progress_value)
-        self.load_more_ring.setValue(self._progress_value)
 
-    def _show_loading(self, text: str) -> None:
-        self.status_label.hide()
-        self.loading_text.setText(text)
-        self.content_stack.setCurrentIndex(1)
-        self._progress_value = 0
-        self._progress_timer.start()
-
-    def _hide_loading(self) -> None:
-        """Stop the spinning timer."""
-        self._progress_timer.stop()
-        self.progress_ring.setValue(0)
-        self.load_more_ring.setValue(0)
-
-    def _show_status(self, msg: str, is_error: bool = False) -> None:
-        self._hide_loading()
-        self.status_label.setText(msg)
-        self.status_label.setStyleSheet(
-            "color: #e74c3c; font-size: 13px;" if is_error else f"color: {normal_text_color()}; font-size: 13px;"
-        )
-        self.status_label.show()
-
-    def _show_error(self, msg: str) -> None:
-        self._show_status(msg, is_error=True)
-        if self.window():
-            InfoBar.error(
-                title="请求失败", content=msg,
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=5000,
-                parent=self.window(),
-            )
-
-    def _on_safe_reset(self) -> None:
-        """Reset page-specific state before worker cleanup."""
-        self._loading = False
-        self._load_cancelled = True
-        self._progress_timer.stop()
-        self.progress_ring.setValue(0)
-        self.load_more_ring.setValue(0)
-
-    def on_page_left(self) -> None:
-        """Cancel in-flight workers and cover loaders when leaving the page.
-        _safe_reset() calls _on_safe_reset() (clears flags, stops timer),
-        _cancel_cover_loaders(), then disconnects/interrupts all workers.
-        """
-        self._safe_reset()
 
     def reset_to_idle(self) -> None:
         """Reset page to idle state after an error."""
@@ -478,7 +430,7 @@ class UpPage(SmoothScrollArea, WorkerMixin):
             try:
                 self._add_video_cards(videos)
             except Exception:
-                pass
+                logger.exception("Failed to add video cards in up_page")
 
         self.content_stack.setCurrentIndex(2)
 
@@ -566,14 +518,6 @@ class UpPage(SmoothScrollArea, WorkerMixin):
         """Emit parse signal with the full video URL."""
         url = f"https://www.bilibili.com/video/{bvid}"
         self.parse_video.emit(url)
-
-    def _clear_grid(self) -> None:
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-        self._video_cards.clear()
-        self._cancel_cover_loaders()
 
     def clear(self) -> None:
         """Reset the page state."""

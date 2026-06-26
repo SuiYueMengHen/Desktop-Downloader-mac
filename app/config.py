@@ -2,8 +2,12 @@
 Configuration management for the desktop downloader.
 """
 import json
+import logging
 import threading
 from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
 
 
 class Config:
@@ -58,6 +62,7 @@ class Config:
         # Debounced save: writes to disk at most once per DEBOUNCE seconds
         self._dirty = False
         self._save_timer: threading.Timer = None
+        self._ffmpeg_cached: str | None = None
         self._DEBOUNCE_SECONDS = 1.0  # seconds
 
         self._ensure_dirs()
@@ -76,16 +81,73 @@ class Config:
     def cookie_dir(self) -> Path:
         return self._cookie_dir
 
+    _FIELD_TYPES: dict[str, type] = {
+        "download_path": str,
+        "max_concurrent_downloads": int,
+        "download_speed_limit": int,
+        "theme_mode": str,
+        "language": str,
+        "bilibili_sessdata": str,
+        "bilibili_bili_jct": str,
+        "bilibili_buvid3": str,
+        "proxy_enabled": bool,
+        "proxy_url": str,
+        "save_metadata": bool,
+        "clipboard_monitor_enabled": bool,
+        "notification_enabled": bool,
+        "notification_sound": bool,
+        "minimize_to_tray": bool,
+        "post_download_transcode": str,
+        "schedule_enabled": bool,
+        "schedule_start": str,
+        "schedule_end": str,
+        "schedule_days": list,
+        "startup_animation": bool,
+    }
+
+    def _validate(self) -> None:
+        """Reset corrupted fields to defaults."""
+        defaults = {
+            "download_path": str(Path.home() / "Downloads" / "DesktopDownloader"),
+            "max_concurrent_downloads": 3,
+            "download_speed_limit": 0,
+            "theme_mode": "auto",
+            "language": "zh_CN",
+            "bilibili_sessdata": "",
+            "bilibili_bili_jct": "",
+            "bilibili_buvid3": "",
+            "proxy_enabled": False,
+            "proxy_url": "",
+            "save_metadata": True,
+            "clipboard_monitor_enabled": False,
+            "notification_enabled": True,
+            "notification_sound": True,
+            "minimize_to_tray": False,
+            "post_download_transcode": "none",
+            "schedule_enabled": False,
+            "schedule_start": "23:00",
+            "schedule_end": "07:00",
+            "schedule_days": [0, 1, 2, 3, 4, 5, 6],
+            "startup_animation": True,
+        }
+        for key, expected_type in self._FIELD_TYPES.items():
+            if key not in self._data:
+                self._data[key] = defaults[key]
+            elif not isinstance(self._data[key], expected_type):
+                logger.warning("Config field '%s' has wrong type, resetting to default", key)
+                self._data[key] = defaults[key]
+
     def load(self) -> None:
-        """Load config from file."""
+        """Load config from file and validate."""
         if self._config_file.exists():
             try:
                 with open(self._config_file, "r", encoding="utf-8") as f:
                     saved = json.load(f)
                     with self._data_lock:
                         self._data.update(saved)
-            except (json.JSONDecodeError, IOError):
-                pass
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning("Failed to load config: %s", e)
+        self._validate()
 
     def _do_save(self) -> None:
         """Persist config JSON to disk (called by debounce timer or directly)."""
@@ -198,9 +260,8 @@ class Config:
         """Return the bundled ffmpeg path (macOS or Windows).
         Result is cached after the first call since the binary location
         doesn't change during runtime."""
-        cached = getattr(self, '_ffmpeg_cached', None)
-        if cached is not None:
-            return cached
+        if self._ffmpeg_cached is not None:
+            return self._ffmpeg_cached
         # Look relative to the app directory
         here = Path(__file__).resolve().parent.parent  # desktop-downloader/
         candidates = [

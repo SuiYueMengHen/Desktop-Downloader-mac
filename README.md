@@ -46,17 +46,16 @@ python main.py
 
 ```bash
 pip install pyinstaller
-pyinstaller "Desktop Downloader.spec"
+./build.sh            # 构建当前版本
+./build.sh bump       # 自动递增 patch 版本号后构建
+./build.sh bump-minor # 自动递增 minor 版本号后构建
 ```
 
-构建产物位于 `dist/Desktop Downloader.app`。可用 `create-dmg` 或 `hdiutil` 进一步打包为 `.dmg`。
+构建产物位于 `dist/` 目录：
+- `dist/Desktop Downloader.app` — 独立应用
+- `dist/Desktop Downloader-{version}.dmg` — 安装包（拖入 Applications 即可）
 
-```bash
-hdiutil create -volname "Desktop Downloader v1.0.3" \
-  -srcfolder "dist/Desktop Downloader.app" \
-  -ov -format UDZO \
-  "Desktop Downloader v1.0.3.dmg"
-```
+`build.sh` 自动执行：版本号递增 → PyInstaller 构建 → 清除无用框架（Qt/PIL/lxml）→ 重签名 → 创建 DMG。
 
 ## 使用说明
 
@@ -89,6 +88,8 @@ desktop-downloader/
 │   ├── cookie_manager.py    # Cookie / 登录管理
 │   ├── history_manager.py   # 下载历史记录
 │   ├── notification.py      # 系统通知
+│   ├── theme.py             # 主题感知样式系统
+│   ├── update_checker.py    # 自动更新检查
 │   ├── platforms/           # 平台解析器（bilibili 等）
 │   ├── ui/                  # UI 页面
 │   │   ├── home_page.py
@@ -103,13 +104,39 @@ desktop-downloader/
 ├── bin/
 │   └── ffmpeg               # 内置 FFmpeg
 ├── main.py                  # 入口
+├── build.sh                 # 构建脚本
+├── post_process.sh          # 构建后处理（清理 + 签名）
 ├── requirements.txt
 └── Desktop Downloader.spec  # PyInstaller 打包配置
 ```
 
 ## 更新记录
 
-### v1.0.3 (2026-06-26)
+### v1.0.4 (2026-06-26)
+
+**稳定性**
+- 🛡️ 全局异常兜底 — `sys.excepthook` 写入日志文件 `~/.desktop-downloader/app.log`
+- 🛡️ 配置校验 — 损坏配置自动重置为默认值
+- 🛡️ 资源泄漏修复 — `stop_all()` 非阻塞，共享 3s  deadline 并行 wait
+- 🛡️ 启动崩溃恢复 — `.running` 标记 + InfoBar 提示
+- 🛡️ WorkerMixin 清理 — 移除死代码分支 `_submit_next_batch`
+
+**UI/UX**
+- 🎨 空状态缺省页 — 历史/下载/首页统一样式（IconWidget + 标题）
+- 🎨 暗色模式打磨 — 所有文字颜色通过 `app/theme.py` 统一管理，主题切换自动适配
+- 🎨 操作反馈增强 — 通知可点击（点击跳转下载页）
+- 🎨 设置页搜索栏 — `SearchLineEdit` 过滤设置卡片
+- 🎨 统计看板 — 历史页顶部显示文件总数/总大小/平台分布/平均大小
+
+**历史管理**
+- 📁 CSV/JSON 导出 — 批量导出历史记录
+- 📁 批量删除 — 多选后一键删除
+- 📁 搜索过滤 — 实时搜索历史条目
+
+**构建**
+- 📦 `build.sh` — 全自动构建脚本（版本自增 → PyInstaller → 清理 → 签名 → DMG）
+- 📦 `update_checker.py` — 启动时后台检查 GitHub Releases 新版本
+- 📦 DMG 安装包 — 拖入 Applications 即可安装
 
 **修复**
 - 🐞 暗色模式开屏图标/文字颜色 — `SplashOverlay` 在主题应用后刷新图标与文字色

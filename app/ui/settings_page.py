@@ -1,6 +1,7 @@
 """
 Settings page - theme, download path, account management.
 """
+from datetime import datetime, time as dtime
 from PySide6.QtCore import Qt, QTime, Signal
 from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFrame, QFileDialog,
@@ -12,13 +13,14 @@ from qfluentwidgets import (
     LineEdit, InfoBar, InfoBarPosition, FluentIcon as FIF,
     HorizontalSeparator, toggleTheme, isDarkTheme, Theme,
     setTheme, Slider, StrongBodyLabel, SpinBox, SwitchButton,
-    CheckBox, TimePicker, SmoothScrollArea,
+    CheckBox, TimePicker, SmoothScrollArea, SearchLineEdit,
 )
 
 from app.config import Config
 from app.cookie_manager import CookieManager
 from app.ui.login_dialog import BilibiliLoginDialog
-from app.utils.helpers import muted_text_color, secondary_text_color, configure_smooth_scroll
+from app.utils.helpers import configure_smooth_scroll
+from app.theme import apply_style
 
 
 class SettingsPage(SmoothScrollArea):
@@ -58,7 +60,7 @@ class SettingsPage(SmoothScrollArea):
 
     def _note(self, text: str) -> CaptionLabel:
         n = CaptionLabel(text)
-        n.setStyleSheet(f"color: {muted_text_color()};")
+        apply_style(n, color="muted")
         return n
 
     def _card_title(self, text: str) -> StrongBodyLabel:
@@ -82,10 +84,26 @@ class SettingsPage(SmoothScrollArea):
         header = TitleLabel("设置")
         header.setStyleSheet("font-size: 28px; font-weight: 600;")
         self.vBoxLayout.addWidget(header)
+
+        desc = CaptionLabel("配置下载、网络、外观等选项")
+        apply_style(desc, "font-size: 14px;", "muted")
+        self.vBoxLayout.addWidget(desc)
+
+        # Search bar
+        self.settings_search = SearchLineEdit()
+        self.settings_search.setPlaceholderText("搜索设置项...")
+        self.settings_search.setClearButtonEnabled(True)
+        self.settings_search.setMinimumHeight(36)
+        self.settings_search.textChanged.connect(self._on_settings_search)
+        self.vBoxLayout.addWidget(self.settings_search)
+
         self.vBoxLayout.addWidget(HorizontalSeparator())
 
+        self._card_widgets: list[QFrame] = []
+        self._cards = []
         self._add_download_card()
         self._add_schedule_card()
+        self._add_network_card()
         self._add_account_card()
         self._add_appearance_card()
         self._add_about_card()
@@ -207,6 +225,7 @@ class SettingsPage(SmoothScrollArea):
         )
         layout.addLayout(tray_row)
 
+        self._cards.append(card)
         self.vBoxLayout.addWidget(card)
 
     # ══════════════════════════════════════════════════
@@ -229,6 +248,16 @@ class SettingsPage(SmoothScrollArea):
         )
         layout.addLayout(sched_row)
         layout.addSpacing(4)
+
+        # ── Status indicator ──
+        status_row = QHBoxLayout()
+        status_row.addWidget(self._label("当前状态:", self._LABEL_WIDTH))
+        self.schedule_status_label = CaptionLabel("")
+        self.schedule_status_label.setStyleSheet("font-size: 13px;")
+        status_row.addWidget(self.schedule_status_label)
+        status_row.addStretch()
+        layout.addLayout(status_row)
+        self._refresh_schedule_status()
 
         # ── Time range ──
         time_row = QHBoxLayout()
@@ -266,6 +295,44 @@ class SettingsPage(SmoothScrollArea):
         day_row.addStretch()
         layout.addLayout(day_row)
 
+        self._cards.append(card)
+        self._cards.append(card)
+        self.vBoxLayout.addWidget(card)
+
+    # ══════════════════════════════════════════════════
+    #  网络设置
+    # ══════════════════════════════════════════════════
+
+    def _add_network_card(self) -> None:
+        card = CardWidget(self.container)
+        layout = QVBoxLayout(card)
+        layout.setSpacing(12)
+
+        layout.addWidget(self._card_title("网络设置"))
+
+        # ── Proxy enable toggle ──
+        proxy_enable_row = self._row(
+            self._label("启用代理:", self._LABEL_WIDTH),
+            self._switch("proxy_switch", self.config.proxy_enabled,
+                         self._on_proxy_toggled),
+            self._note("通过代理服务器下载"),
+        )
+        layout.addLayout(proxy_enable_row)
+
+        # ── Proxy URL ──
+        url_row = QHBoxLayout()
+        url_row.addWidget(self._label("代理地址:", self._LABEL_WIDTH))
+        self.proxy_input = LineEdit()
+        self.proxy_input.setText(self.config.proxy_url)
+        self.proxy_input.setPlaceholderText("http://127.0.0.1:7890")
+        self.proxy_input.setMinimumWidth(300)
+        self.proxy_input.setEnabled(self.config.proxy_enabled)
+        self.proxy_input.returnPressed.connect(self._on_proxy_url_changed)
+        url_row.addWidget(self.proxy_input, 1)
+        url_row.addStretch()
+        layout.addLayout(url_row)
+
+        self._cards.append(card)
         self.vBoxLayout.addWidget(card)
 
     # ══════════════════════════════════════════════════
@@ -284,11 +351,10 @@ class SettingsPage(SmoothScrollArea):
         self.bilibili_status = CaptionLabel(
             "已登录" if self.cookie_manager.is_bilibili_logged_in() else "未登录"
         )
-        self.bilibili_status.setStyleSheet(
-            "color: #27ae60; font-size: 13px;"
-            if self.cookie_manager.is_bilibili_logged_in()
-            else "color: #e74c3c; font-size: 13px;"
-        )
+        if self.cookie_manager.is_bilibili_logged_in():
+            apply_style(self.bilibili_status, "font-size: 13px;", ("#27ae60", "#2ecc71"))
+        else:
+            apply_style(self.bilibili_status, "font-size: 13px;", ("#e74c3c", "#ff6b6b"))
         self.bilibili_login_btn = PushButton(FIF.PEOPLE, "登录")
         self.bilibili_login_btn.clicked.connect(self._open_bilibili_login)
         self.bilibili_logout_btn = PushButton(FIF.DELETE, "清除Cookie")
@@ -300,6 +366,7 @@ class SettingsPage(SmoothScrollArea):
         bili_row.addWidget(self.bilibili_logout_btn)
         layout.addLayout(bili_row)
 
+        self._cards.append(card)
         self.vBoxLayout.addWidget(card)
 
     # ══════════════════════════════════════════════════
@@ -336,6 +403,7 @@ class SettingsPage(SmoothScrollArea):
         )
         layout.addLayout(startup_row)
 
+        self._cards.append(card)
         self.vBoxLayout.addWidget(card)
 
     # ══════════════════════════════════════════════════
@@ -356,10 +424,56 @@ class SettingsPage(SmoothScrollArea):
             "支持 Bilibili 视频下载\n\n"
             "注意: 请尊重平台版权，仅下载个人学习用途的内容"
         )
-        txt.setStyleSheet(f"color: {muted_text_color()}; font-size: 13px;")
+        apply_style(txt, "font-size: 13px;", "muted")
         layout.addWidget(txt)
 
+        check_btn = PushButton("检查更新")
+        check_btn.setFixedWidth(140)
+        check_btn.setIcon(FIF.DOWNLOAD)
+        check_btn.clicked.connect(self._check_updates)
+        layout.addWidget(check_btn)
+
+        self._cards.append(card)
         self.vBoxLayout.addWidget(card)
+
+    def _check_updates(self) -> None:
+        from app.update_checker import UpdateChecker
+        from app import __version__ as app_ver
+        checker = UpdateChecker(parent=self)
+
+        def _on_result(version: str, url: str):
+            if version:
+                InfoBar.success(
+                    title="发现新版本",
+                    content=f"Desktop Downloader {version} 已可用",
+                    orient=Qt.Horizontal, isClosable=True,
+                    position=InfoBarPosition.TOP_RIGHT, duration=8000,
+                    parent=self,
+                )
+            else:
+                InfoBar.info(
+                    title="已是最新",
+                    content=f"当前版本 {app_ver} 已是最新",
+                    orient=Qt.Horizontal, isClosable=True,
+                    position=InfoBarPosition.TOP_RIGHT, duration=3000,
+                    parent=self,
+                )
+
+        checker.update_available.connect(_on_result)
+        checker.check()
+
+    # ── Settings search ──
+
+    def _on_settings_search(self, text: str) -> None:
+        """Filter settings cards by title text."""
+        q = text.strip().lower()
+        for card in self._cards:
+            # Find the title label (first StrongBodyLabel child)
+            title = card.findChild(StrongBodyLabel)
+            if title and q and q not in title.text().lower():
+                card.hide()
+            else:
+                card.show()
 
     # ── Switch helper ──
 
@@ -403,19 +517,64 @@ class SettingsPage(SmoothScrollArea):
     def _on_startup_animation_toggled(self, enabled: bool) -> None:
         self.config.startup_animation = enabled
 
+    def _on_proxy_toggled(self, enabled: bool) -> None:
+        self.config.proxy_enabled = enabled
+        self.proxy_input.setEnabled(enabled)
+        status = "已启用" if enabled else "已禁用"
+        InfoBar.success(
+            title="代理设置", content=f"网络代理{status}",
+            orient=Qt.Horizontal, isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT, duration=3000,
+            parent=self.window(),
+        )
+
+    def _on_proxy_url_changed(self) -> None:
+        url = self.proxy_input.text().strip()
+        self.config.proxy_url = url
+        InfoBar.success(
+            title="已更新", content=f"代理地址: {url}",
+            orient=Qt.Horizontal, isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT, duration=3000,
+            parent=self.window(),
+        )
+
     def _on_schedule_enabled_changed(self, enabled: bool) -> None:
         self.config.schedule_enabled = enabled
+        self._refresh_schedule_status()
         self.schedule_changed.emit()
 
     def _on_schedule_time_changed(self) -> None:
         self.config.schedule_start = f"{self.start_picker.hour():02d}:{self.start_picker.minute():02d}"
         self.config.schedule_end = f"{self.end_picker.hour():02d}:{self.end_picker.minute():02d}"
+        self._refresh_schedule_status()
         self.schedule_changed.emit()
 
     def _on_schedule_days_changed(self) -> None:
         days = [i for i, cb in enumerate(self.day_checkboxes) if cb.isChecked()]
         self.config.schedule_days = days
+        self._refresh_schedule_status()
         self.schedule_changed.emit()
+
+    def _refresh_schedule_status(self) -> None:
+        """Update the schedule status label based on current config and time."""
+        if not self.config.schedule_enabled:
+            self.schedule_status_label.setText("未启用")
+            apply_style(self.schedule_status_label, "font-size: 13px;", "muted")
+            return
+        today = datetime.now().weekday()
+        if today not in self.config.schedule_days:
+            self.schedule_status_label.setText("今天不在所选日期内")
+            apply_style(self.schedule_status_label, "font-size: 13px;", ("#e67e22", "#f39c12"))
+            return
+        now = datetime.now().time()
+        start = dtime.fromisoformat(self.config.schedule_start)
+        end = dtime.fromisoformat(self.config.schedule_end)
+        if start <= now < end:
+            self.schedule_status_label.setText("● 下载时段中")
+            apply_style(self.schedule_status_label, "font-size: 13px;", ("#27ae60", "#2ecc71"))
+        else:
+            self.schedule_status_label.setText("○ 非下载时段")
+            apply_style(self.schedule_status_label, "font-size: 13px;", "muted")
 
     def _browse_path(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择下载目录", self.path_input.text())
@@ -463,7 +622,7 @@ class SettingsPage(SmoothScrollArea):
 
     def _on_bilibili_login_success(self, creds: dict) -> None:
         self.bilibili_status.setText("已登录")
-        self.bilibili_status.setStyleSheet("color: #27ae60; font-size: 13px;")
+        apply_style(self.bilibili_status, "font-size: 13px;", ("#27ae60", "#2ecc71"))
         self.bilibili_logout_btn.setVisible(True)
         mw = self.window()
         if hasattr(mw, 'bilibili') and hasattr(mw.bilibili, 'refresh_credential'):
@@ -472,7 +631,7 @@ class SettingsPage(SmoothScrollArea):
     def _clear_bilibili_cookie(self) -> None:
         self.cookie_manager.clear_bilibili()
         self.bilibili_status.setText("未登录")
-        self.bilibili_status.setStyleSheet("color: #e74c3c; font-size: 13px;")
+        apply_style(self.bilibili_status, "font-size: 13px;", ("#e74c3c", "#ff6b6b"))
         self.bilibili_logout_btn.setVisible(False)
         mw = self.window()
         if hasattr(mw, 'bilibili') and hasattr(mw.bilibili, 'refresh_credential'):

@@ -2,9 +2,12 @@
 Main application window with FluentWindow sidebar navigation.
 """
 import asyncio
+import logging
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtWidgets import QApplication, QWidget
 from PySide6.QtGui import QKeySequence, QShortcut, QCloseEvent
+
+logger = logging.getLogger(__name__)
 
 from qfluentwidgets import (
     FluentWindow, NavigationItemPosition, FluentIcon as FIF,
@@ -25,6 +28,7 @@ from app.ui.search_page import SearchPage
 from app.ui.splash_screen import SplashOverlay
 from app.clipboard_monitor import ClipboardMonitor
 from app.notification import NotificationService
+from app.update_checker import UpdateChecker
 from app.platforms.bilibili import BilibiliPlatform
 from app.utils.helpers import detect_url_type
 from typing import Optional
@@ -56,10 +60,21 @@ class CredentialCheckWorker(QThread):
 class MainWindow(FluentWindow):
     """Main window with Fluent Design sidebar navigation."""
 
-    def __init__(self):
+    def __init__(self, was_crashed: bool = False):
         super().__init__()
 
         self.config = Config()
+
+        if was_crashed:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            logging.warning("App recovered from previous crash")
+            QTimer.singleShot(3000, lambda: InfoBar.warning(
+                title="上次异常退出",
+                content="应用上次未正常关闭，日志已保存至 ~/.desktop-downloader/app.log",
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=10000,
+                parent=self,
+            ))
         self.cookie_manager = CookieManager()
         self.download_manager = DownloadManager(
             mc=self.config.max_concurrent_downloads
@@ -74,6 +89,11 @@ class MainWindow(FluentWindow):
 
         # Notification service (system tray + sound)
         self.notification_service = NotificationService(self)
+
+        # Update checker (background)
+        self.update_checker = UpdateChecker(parent=self)
+        self.update_checker.update_available.connect(self._on_update_available)
+        QTimer.singleShot(5000, self._check_updates)
 
         self._batch_urls: list[str] = []
         self._batch_index: int = 0
@@ -144,6 +164,18 @@ class MainWindow(FluentWindow):
         self.splash.set_status("加载完成")
         self.splash.dismiss()
         self.splash = None
+
+    def _check_updates(self) -> None:
+        self.update_checker.check()
+
+    def _on_update_available(self, version: str, url: str) -> None:
+        InfoBar.success(
+            title="发现新版本",
+            content=f"Desktop Downloader {version} 已可用{' · 点击下载' if url else ''}",
+            orient=Qt.Horizontal, isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT, duration=15000,
+            parent=self,
+        )
 
     @property
     def download_page(self) -> DownloadPage:
@@ -336,6 +368,14 @@ class MainWindow(FluentWindow):
         self.notification_service.show_window_requested.connect(self._toggle_visibility)
         self.notification_service.quit_requested.connect(self._quit_app)
 
+        # Click notification → show window + switch to download page
+        self.notification_service.notification_clicked.connect(
+            lambda _: self.switchTo(self.download_page) if self.isMinimized() or not self.isVisible() else None
+        )
+        self.notification_service.notification_clicked.connect(
+            lambda _: self._toggle_visibility() if self.isMinimized() or not self.isVisible() else None
+        )
+
         # Settings page tray toggle
         if hasattr(self.settings_page, 'tray_toggled'):
             self.settings_page.tray_toggled.connect(self._on_tray_toggled)
@@ -345,6 +385,13 @@ class MainWindow(FluentWindow):
             self.settings_page.schedule_changed.connect(
                 self.download_manager.on_schedule_changed
             )
+
+        # Schedule window state change notification
+        self.download_manager.schedule_state_changed.connect(
+            lambda in_window: self.notification_service.notify_complete(
+                "下载调度", "已进入下载时段，开始下载" if in_window else "已离开下载时段，暂停下载"
+            )
+        )
 
         # UP主 space -> parse video and jump to home page
         self.up_page.parse_video.connect(self._on_up_parse_video)
@@ -571,7 +618,7 @@ class MainWindow(FluentWindow):
             try:
                 current.on_page_left()
             except Exception:
-                pass  # lifecycle errors must not block navigation
+                logger.warning("on_page_left error during navigation", exc_info=True)
         self.stackedWidget.setCurrentWidget(widget)
         # Sync the navigation sidebar highlight with the current page
         nav = self.navigationInterface

@@ -3,11 +3,14 @@ Clipboard monitor - watches clipboard for Bilibili video URLs.
 Uses QTimer to poll clipboard text periodically and emits a signal when a
 supported video URL is detected (with dedup).
 """
+import logging
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QClipboard
 from PySide6.QtWidgets import QApplication
 
 from app.utils.helpers import detect_platform
+
+logger = logging.getLogger(__name__)
 
 
 class ClipboardMonitor(QObject):
@@ -76,5 +79,4 @@ class ClipboardMonitor(QObject):
                 # re-triggering on the same URL when user copies other stuff
                 self._last_url = text
         except RuntimeError:
-            # Qt C++ wrapper may be deleted during shutdown
-            pass
+            logger.warning("Clipboard access failed (shutdown?)", exc_info=True)

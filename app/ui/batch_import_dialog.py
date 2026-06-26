@@ -4,10 +4,10 @@ from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget
 from qfluentwidgets import (
     Dialog, CaptionLabel,
     FluentIcon as FIF, PlainTextEdit,
-    TransparentToolButton, isDarkTheme,
+    TransparentToolButton, isDarkTheme, setCustomStyleSheet,
 )
 
-from app.utils.helpers import secondary_text_color, normal_text_color
+from app.theme import apply_style
 
 
 class AnimatedCountBadge(QWidget):
@@ -83,7 +83,6 @@ class BatchImportDialog(Dialog):
                 empty.setSpacing(0)
                 self.vBoxLayout.setStretch(i, 0)
                 break
-        self._connect_signals()
         self._update_count()
 
     def _setup_ui(self):
@@ -107,7 +106,7 @@ class BatchImportDialog(Dialog):
         dedup_btn.clicked.connect(self._deduplicate)
 
         self.status_label = StatusLabel()
-        self.status_label.setStyleSheet(f"color: {secondary_text_color()};")
+        apply_style(self.status_label, color="secondary")
 
         self.count_badge = AnimatedCountBadge()
 
@@ -146,10 +145,10 @@ class BatchImportDialog(Dialog):
         """)
 
         edit_container = QWidget()
-        edit_container.setStyleSheet(
-            "background-color: transparent;"
-            "border: 1px solid rgba(0, 0, 0, 0.08);"
-            "border-radius: 8px;"
+        setCustomStyleSheet(
+            edit_container,
+            "background-color: transparent; border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 8px;",
+            "background-color: transparent; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px;",
         )
         edit_layout = QVBoxLayout(edit_container)
         edit_layout.setContentsMargins(0, 0, 0, 0)
@@ -159,9 +158,6 @@ class BatchImportDialog(Dialog):
         layout.addWidget(edit_container, 1)
 
         self.vBoxLayout.insertLayout(0, layout)
-
-    def _connect_signals(self):
-        pass
 
     def _paste_from_clipboard(self):
         from PySide6.QtGui import QGuiApplication
