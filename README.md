@@ -191,3 +191,11 @@ desktop-downloader/
 ## 许可证
 
 [MIT](LICENSE)
+
+## Project Status
+
+This repository is maintained as part of SuiYueMengHen's open-source project collection. Issues and suggestions are welcome.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
